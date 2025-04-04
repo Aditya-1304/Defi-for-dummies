@@ -1,0 +1,89 @@
+{
+  "address": "B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv",
+  "metadata": {
+    "name": "web3_for_dummies",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "process_transaction",
+      "discriminator": [
+        70,
+        108,
+        123,
+        244,
+        12,
+        102,
+        131,
+        249
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sender_token_account",
+          "writable": true
+        },
+        {
+          "name": "sender_token_account_mint",
+          "writable": true
+        },
+        {
+          "name": "receiver_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "TransactionEvent",
+      "discriminator": [
+        164,
+        87,
+        102,
+        61,
+        105,
+        53,
+        147,
+        32
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "TransactionEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "from",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "web3-for-dummies"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "web3_for_dummies"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build","anchor-spl/idl-build"]
+
+
+[dependencies]
+anchor-lang = "0.31.0"
+anchor-spl = "0.31.0"
+
