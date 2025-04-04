@@ -7,6 +7,7 @@ export interface PaymentInstruction {
   token?: string;
   amount?: number;
   recipient?: string;
+  network? : "localnet" | "devnet" | "mainnet";
   confidence: number;
   raw?: any;
 }
@@ -61,9 +62,15 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     Extract the following information if present:
     1. Is this a payment instruction? (true/false)
     2. Is this a balance check request? (true/false)
-    3. Amount to be sent (number)
+    3. Amount to be sent (number) - for payments only
     4. Cryptocurrency token (e.g., SOL, USDC)
-    5. Recipient address
+    5. Recipient address - for payments only
+    6. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    
+    For example:
+    - "Check my balance on devnet" -> network = "devnet"
+    - "What's my SOL balance on localnet?" -> network = "localnet"
+    - "Balance" -> network = "localnet" (default)
     
     For testing on localnet, always assume SOL is the default token if none is specified.
     Solana addresses are 32-44 characters long and consist of letters and numbers.
@@ -103,6 +110,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
               (parsedResult.amount === null ? undefined : parseFloat(parsedResult.amount)),
       token: parsedResult.token || "SOL", // Default to SOL for localnet
       recipient: parsedResult.recipient || undefined,
+      network: parsedResult.network || "localnet",
       confidence: parsedResult.confidence || 0.8,
       raw: parsedResult
     };
@@ -117,6 +125,15 @@ function parseWithRegex(message: string): PaymentInstruction {
   // Convert message to lowercase for case-insensitive matching
   const lowerMessage = message.toLowerCase();
   
+  let network: "localnet" | "devnet" | "mainnet" = "localnet";
+
+  if(lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
+    network = "devnet";
+  }else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
+    network = "mainnet";
+  }else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
+    network = "localnet"
+  }
   // Common payment keywords
   const paymentKeywords = ['send', 'transfer', 'pay'];
   const balanceKeywords = ['balance', 'check balance', 'how much','show balance','available balance'];
@@ -140,6 +157,7 @@ function parseWithRegex(message: string): PaymentInstruction {
       isPayment: false,
       isBalanceCheck: true,
       token,
+      network,
       confidence: 0.8,
     }
   }

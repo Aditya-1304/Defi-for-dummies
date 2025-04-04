@@ -19,7 +19,13 @@ const LOCALNET_TOKENS: Record<string, PublicKey | null> = {
 const PROGRAM_ID = new PublicKey("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv");
 
 // Localnet URL (default Solana validator URL when running locally)
-const LOCALNET_URL = "http://localhost:8899";
+const LOCALNET_URL=  "http://localhost:8899";
+
+const NETWORK_URLS = {
+  localnet: "http://localhost:8899",
+  devnet: "https://api.devnet.solana.com",
+  mainnet: "https://solana-mainnet.rpc.extrnode.com"
+}
 
 export async function executePayment(
   connection: web3.Connection,
@@ -155,22 +161,40 @@ export async function executePayment(
 export async function getWalletBalance(
   connection: web3.Connection,
   wallet: any,
-  token: string = 'SOL'
+  token: string = 'SOL',
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
 ) {
   try {
     if(!wallet.publicKey) throw new Error("wallet not connected");
 
+    console.log(`🌐 Getting balance on ${network} network`);
+
+    if (network === "mainnet") {
+      // Inform user about mainnet limitations
+      return {
+        success: true,
+        balance: 0,
+        token: token.toUpperCase(),
+        network,
+        message: `Mainnet balance check is not available in demo mode. Please use devnet or localnet.`
+      };
+    }
+
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed")
+
     const tokenUpperCase = token.toUpperCase();
 
     if (tokenUpperCase === 'SOL') {
-      const balance = await connection.getBalance(wallet.publicKey);
+      const balance = await networkConnection.getBalance(wallet.publicKey);
       const solBalance = balance / web3.LAMPORTS_PER_SOL;
 
       return{
         success: true,
         balance: solBalance,
         token: 'SOL',
-        message: `Your wallet balance is ${solBalance.toFixed(7)} SOL`
+        network,
+        message: `Your ${network} wallet balance is ${solBalance.toFixed(7)} SOL`
       };
     }
 
@@ -194,6 +218,7 @@ export async function getWalletBalance(
           success: true,
           balance: 0,
           token: tokenUpperCase,
+          network,
           message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
         };
       }
@@ -209,6 +234,7 @@ export async function getWalletBalance(
         success: true,
         balance: tokenBalance,
         token: tokenUpperCase,
+        network,
         message: `Your wallet balance is ${tokenBalance.toFixed(decimals)} ${tokenUpperCase}`
       };
     } catch (error) {
@@ -217,6 +243,7 @@ export async function getWalletBalance(
         success: true,
         balance: 0,
         token: tokenUpperCase,
+        network,
         message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
       };
     }
@@ -225,6 +252,7 @@ export async function getWalletBalance(
     return {
       success: false,
       error: error.message,
+      network,
       message: `Failed to get balance: ${error.message}`
     };
   }
