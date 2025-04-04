@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Send } from "lucide-react";
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { parsePaymentInstruction } from "@/services/nlp-service";
-import { executePayment } from "@/services/solana-service";
+import { executePayment, getWalletBalance } from "@/services/solana-service";
 import { WalletButton } from "@/components/wallet/wallet-button";
 
 interface Message {
@@ -74,6 +74,26 @@ export function ChatInterface() {
       const parsedInstruction = await parsePaymentInstruction(userInput);
     
     console.log("Parsed instruction:", parsedInstruction);
+
+    if (parsedInstruction.isBalanceCheck) {
+      if(!wallet.connected) {
+        addAIMessage("Please connect your wallet to check your balance.");
+        setIsLoading(false);
+        return;
+      }
+      const token = parsedInstruction.token || "SOL";
+      addAIMessage(`Checking your ${token} balance...`);
+      
+      const result = await getWalletBalance(connection, wallet, token);
+      
+      if (result.success) {
+        addAIMessage(`💰 ${result.message}`);
+      } else {
+        addAIMessage(`❌ ${result.message}`);
+      }
+      setIsLoading(false);
+      return;
+    }
     
     // Lower the confidence threshold for Gemini
     if (parsedInstruction.isPayment && parsedInstruction.confidence > 0.5) {

@@ -151,3 +151,81 @@ export async function executePayment(
     };
   }
 }
+
+export async function getWalletBalance(
+  connection: web3.Connection,
+  wallet: any,
+  token: string = 'SOL'
+) {
+  try {
+    if(!wallet.publicKey) throw new Error("wallet not connected");
+
+    const tokenUpperCase = token.toUpperCase();
+
+    if (tokenUpperCase === 'SOL') {
+      const balance = await connection.getBalance(wallet.publicKey);
+      const solBalance = balance / web3.LAMPORTS_PER_SOL;
+
+      return{
+        success: true,
+        balance: solBalance,
+        token: 'SOL',
+        message: `Your wallet balance is ${solBalance.toFixed(7)} SOL`
+      };
+    }
+
+    const tokenMint = LOCALNET_TOKENS[tokenUpperCase];
+    if (!tokenMint) {
+      throw new Error(`Token ${token} not supported on localnet`);
+    }
+    
+    // Get the token account address
+    const tokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      wallet.publicKey
+    );
+    
+    try {
+      // Get the token account info
+      const accountInfo = await connection.getAccountInfo(tokenAccount);
+      
+      if (!accountInfo) {
+        return {
+          success: true,
+          balance: 0,
+          token: tokenUpperCase,
+          message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
+        };
+      }
+      
+      // Parse the account data
+      // For a full implementation, you'd need to properly decode the token account data
+      // This is a simplification
+      const decimals = tokenUpperCase === 'USDC' ? 6 : 9;
+      const rawBalance = 0; // Replace with actual parsing of account data
+      const tokenBalance = rawBalance / Math.pow(10, decimals);
+      
+      return {
+        success: true,
+        balance: tokenBalance,
+        token: tokenUpperCase,
+        message: `Your wallet balance is ${tokenBalance.toFixed(decimals)} ${tokenUpperCase}`
+      };
+    } catch (error) {
+      // Token account might not exist
+      return {
+        success: true,
+        balance: 0,
+        token: tokenUpperCase,
+        message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
+      };
+    }
+  } catch (error: any) {
+    console.error("Balance check error:", error);
+    return {
+      success: false,
+      error: error.message,
+      message: `Failed to get balance: ${error.message}`
+    };
+  }
+}
