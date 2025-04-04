@@ -58,7 +58,7 @@ export function ChatInterface() {
 
     // Add user message
     const userMessage: Message = {
-      id: `user-${Date.now()}`, // Create unique ID with timestamp
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, // Create unique ID with timestamp
       content: input,
       sender: "user",
       timestamp: new Date().toISOString(), // Store as string
@@ -82,9 +82,23 @@ export function ChatInterface() {
         return;
       }
       const token = parsedInstruction.token || "SOL";
-      addAIMessage(`Checking your ${token} balance...`);
+      let network = parsedInstruction.network || "localnet";
+      const userInputLower = userInput.toLowerCase();
+      if (userInputLower.includes("devnet") && network !== "devnet") {
+        console.log("Force setting network to devnet based on user input");
+        network = "devnet";
+      } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
+        console.log("Force setting network to mainnet based on user input");
+        network = "mainnet";
+      } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
+        console.log("Force setting network to localnet based on user input");
+        network = "localnet";
+      }
+    
+      console.log(`Checking balance on network: ${network}`);
+      addAIMessage(`Checking your ${token} balance on ${network}...`);
       
-      const result = await getWalletBalance(connection, wallet, token);
+      const result = await getWalletBalance(connection, wallet, token, network);
       
       if (result.success) {
         addAIMessage(`💰 ${result.message}`);
@@ -149,7 +163,7 @@ export function ChatInterface() {
   
   const addAIMessage = (content: string) => {
     const aiMessage: Message = {
-      id: `ai-${Date.now()}`, // Create unique ID with timestamp
+      id: `ai-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, // Create unique ID with timestamp
       content,
       sender: "ai",
       timestamp: new Date().toISOString(), // Store as string
