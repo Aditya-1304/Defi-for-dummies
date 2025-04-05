@@ -24,11 +24,11 @@ export function NetworkSwitcher() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className={`h-2 w-2 rounded-full ${
+      {/* <span className={`h-2 w-2 rounded-full ${
         currentNetwork === 'devnet' ? 'bg-yellow-500' : 
         currentNetwork === 'mainnet' ? 'bg-green-500' : 
         'bg-blue-500'
-      }`}></span>
+      }`}></span> */}
       
       <Select value={currentNetwork} onValueChange={handleNetworkChange}>
         <SelectTrigger className="w-[120px]">
