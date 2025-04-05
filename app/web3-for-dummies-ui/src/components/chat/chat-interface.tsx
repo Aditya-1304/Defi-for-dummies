@@ -124,6 +124,20 @@ export function ChatInterface() {
         setIsLoading(false);
         return;
       }
+
+      let network = parsedInstruction.network || "localnet";
+      const userInputLower = userInput.toLowerCase();
+
+      if (userInputLower.includes("devnet") && network !== "devnet") {
+        console.log("Force setting network to devnet based on user input");
+        network = "devnet";
+      } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
+        console.log("Force setting network to mainnet based on user input");
+        network = "mainnet";
+      } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
+        console.log("Force setting network to localnet based on user input");
+        network = "localnet";
+      }
       
       // Request payment confirmation
       addAIMessage(`I'll help you send ${parsedInstruction.amount} ${parsedInstruction.token} to ${parsedInstruction.recipient}. Please confirm this transaction.`);
@@ -134,7 +148,8 @@ export function ChatInterface() {
           wallet,
           parsedInstruction.recipient!,
           parsedInstruction.amount!,
-          parsedInstruction.token
+          parsedInstruction.token,
+          network
         );
         
         if (result.success) {

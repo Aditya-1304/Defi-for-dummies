@@ -32,14 +32,23 @@ export async function executePayment(
   wallet: any, 
   recipient: string, 
   amount: number, 
-  token: string = 'SOL'
+  token: string = 'SOL',
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
 ) {
   try {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
+
+    if (network === "mainnet") {
+      return {
+        success: false,
+        error: "Mainnet transactions unavailable",
+        message: "Mainnet transactions are unavailable in demo mode. Please use devnet or localnet."
+      }
+    }
     
-    // Ensure we're using a localnet connection
-    // This ensures we're connecting to your local validator
-    const localConnection = new Connection(LOCALNET_URL, "confirmed");
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed")  
+    console.log(`💸 Executing payment on ${network} network`);
     
     const tokenUpperCase = token.toUpperCase();
     
@@ -55,15 +64,23 @@ export async function executePayment(
       );
       
       // Sign and send transaction
-      const signature = await wallet.sendTransaction(transaction, localConnection);
-      await localConnection.confirmTransaction(signature, 'confirmed');
+      const signature = await wallet.sendTransaction(transaction, networkConnection);
+      await networkConnection.confirmTransaction(signature, 'confirmed');
       
-      const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+      let explorerUrl;
+      if (network === "localnet"){
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+      }else if (network === "devnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      }else if (network === "mainnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+      }
 
       return {
         success: true,
         signature,
         explorerUrl,
+        network,
         message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...`
       };
     }
@@ -79,7 +96,7 @@ export async function executePayment(
     
     // Create program instance using localnet connection
     const provider = new AnchorProvider(
-      localConnection,
+      networkConnection,
       wallet,
       { commitment: 'confirmed' }
     );
@@ -101,7 +118,7 @@ export async function executePayment(
     // Check if recipient token account exists, if not create it
     let transaction = new Transaction();
     try {
-      await localConnection.getAccountInfo(recipientTokenAccount);
+      await networkConnection.getAccountInfo(recipientTokenAccount);
     } catch (error) {
       // Add instruction to create recipient token account if it doesn't exist
       transaction.add(
@@ -135,17 +152,26 @@ export async function executePayment(
     
     // Sign and send transaction
     console.log("Sending transaction to localnet...");
-    const signature = await wallet.sendTransaction(transaction, localConnection);
+    const signature = await wallet.sendTransaction(transaction, networkConnection);
     
     console.log("Confirming transaction...");
-    await localConnection.confirmTransaction(signature, 'confirmed');
+    await networkConnection.confirmTransaction(signature, 'confirmed');
     
-    const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+    let explorerUrl;
+    
+      if (network === "localnet"){
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+      }else if (network === "devnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      }else if (network === "mainnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+      }
 
     return {
       success: true,
       signature,
       explorerUrl,
+      network,
       message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}...`
     };
   } catch (error: any) {
