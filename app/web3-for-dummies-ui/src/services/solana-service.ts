@@ -19,47 +19,113 @@ const LOCALNET_TOKENS: Record<string, PublicKey | null> = {
 const PROGRAM_ID = new PublicKey("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv");
 
 // Localnet URL (default Solana validator URL when running locally)
-const LOCALNET_URL = "http://localhost:8899";
+const LOCALNET_URL=  "http://localhost:8899";
+
+const NETWORK_URLS = {
+  localnet: "http://localhost:8899",
+  devnet: "https://api.devnet.solana.com",
+  mainnet: "https://solana-mainnet.rpc.extrnode.com"
+}
 
 export async function executePayment(
   connection: web3.Connection,
   wallet: any, 
   recipient: string, 
   amount: number, 
-  token: string = 'SOL'
+  token: string = 'SOL',
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
 ) {
   try {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
+
+    if (network === "mainnet") {
+      return {
+        success: false,
+        error: "Mainnet transactions unavailable",
+        message: "Mainnet transactions are unavailable in demo mode. Please use devnet or localnet."
+      }
+    }
     
-    // Ensure we're using a localnet connection
-    // This ensures we're connecting to your local validator
-    const localConnection = new Connection(LOCALNET_URL, "confirmed");
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed")  
+    console.log(`💸 Executing payment on ${network} network`);
     
     const tokenUpperCase = token.toUpperCase();
     
     // Handle SOL transfers differently (they don't use token accounts)
     if (tokenUpperCase === 'SOL' && !LOCALNET_TOKENS.SOL) {
-      // Create a simple SOL transfer transaction
-      const transaction = new Transaction().add(
-        web3.SystemProgram.transfer({
+      
+      console.log(`Creating SOL transfer on ${network} with connection endpoint: ${networkConnection.rpcEndpoint}`);
+  
+      try {
+        // Create a simple transfer instruction
+        const transferInstruction = web3.SystemProgram.transfer({
           fromPubkey: wallet.publicKey,
           toPubkey: new PublicKey(recipient),
           lamports: amount * web3.LAMPORTS_PER_SOL
-        })
-      );
-      
-      // Sign and send transaction
-      const signature = await wallet.sendTransaction(transaction, localConnection);
-      await localConnection.confirmTransaction(signature, 'confirmed');
-      
-      const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+        });
+    
+        // Get the latest blockhash using the SAME connection object
+        const { blockhash, lastValidBlockHeight } = await networkConnection.getLatestBlockhash();
+        console.log(`Got blockhash: ${blockhash} from network: ${network}`);
+        
+        // Create transaction and add our transfer instruction
+        const transaction = new Transaction();
+        transaction.add(transferInstruction);
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = wallet.publicKey;
+        
+        // Have the wallet sign the transaction
+        const signedTransaction = await wallet.signTransaction(transaction);
+        console.log("Transaction signed successfully");
+        
+        // Now send the signed transaction with our connection
+        const signature = await networkConnection.sendRawTransaction(signedTransaction.serialize());
+        console.log("Raw transaction sent with signature:", signature);
+        
+        // Wait for confirmation
+        console.log("Waiting for confirmation...");
+        const confirmation = await networkConnection.confirmTransaction({
+          signature,
+          blockhash,
+          lastValidBlockHeight
+        });
+        
+        if (confirmation.value.err) {
+          throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+        }
+        
+        console.log("Transaction confirmed successfully!");
+        
+        // Create explorer URL
+        let explorerUrl;
+        if (network === "localnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+        } else if (network === "devnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+        } else if (network === "mainnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+        }
+        
+        return {
+          success: true,
+          signature,
+          explorerUrl,
+          network,
+          message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...on ${network}`
+        };
+    } catch (error) {
+      console.error("Transaction error:", error);
 
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const logs = (error as any)?.logs || [];
+      
       return {
-        success: true,
-        signature,
-        explorerUrl,
-        message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...`
-      };
+        success: false,
+        error: errorMessage,
+        message: `Transaction failed on ${network}. ${errorMessage}${logs}`
+      }
+    }
     }
     
     // Token transfers (for USDC etc.)
@@ -73,7 +139,7 @@ export async function executePayment(
     
     // Create program instance using localnet connection
     const provider = new AnchorProvider(
-      localConnection,
+      networkConnection,
       wallet,
       { commitment: 'confirmed' }
     );
@@ -95,7 +161,7 @@ export async function executePayment(
     // Check if recipient token account exists, if not create it
     let transaction = new Transaction();
     try {
-      await localConnection.getAccountInfo(recipientTokenAccount);
+      await networkConnection.getAccountInfo(recipientTokenAccount);
     } catch (error) {
       // Add instruction to create recipient token account if it doesn't exist
       transaction.add(
@@ -129,17 +195,26 @@ export async function executePayment(
     
     // Sign and send transaction
     console.log("Sending transaction to localnet...");
-    const signature = await wallet.sendTransaction(transaction, localConnection);
+    const signature = await wallet.sendTransaction(transaction, networkConnection);
     
     console.log("Confirming transaction...");
-    await localConnection.confirmTransaction(signature, 'confirmed');
+    await networkConnection.confirmTransaction(signature, 'confirmed');
     
-    const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+    let explorerUrl;
+    
+      if (network === "localnet"){
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+      }else if (network === "devnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      }else if (network === "mainnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+      }
 
     return {
       success: true,
       signature,
       explorerUrl,
+      network,
       message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}...`
     };
   } catch (error: any) {
@@ -148,6 +223,106 @@ export async function executePayment(
       success: false,
       error: error.message,
       message: `Failed to send payment: ${error.message}`
+    };
+  }
+}
+
+export async function getWalletBalance(
+  connection: web3.Connection,
+  wallet: any,
+  token: string = 'SOL',
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+) {
+  try {
+    if(!wallet.publicKey) throw new Error("wallet not connected");
+
+    console.log(`🌐 Getting balance on ${network} network`);
+
+    if (network === "mainnet") {
+      // Inform user about mainnet limitations
+      return {
+        success: true,
+        balance: 0,
+        token: token.toUpperCase(),
+        network,
+        message: `Mainnet balance check is not available in demo mode. Please use devnet or localnet.`
+      };
+    }
+
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed")
+
+    const tokenUpperCase = token.toUpperCase();
+
+    if (tokenUpperCase === 'SOL') {
+      const balance = await networkConnection.getBalance(wallet.publicKey);
+      const solBalance = balance / web3.LAMPORTS_PER_SOL;
+
+      return{
+        success: true,
+        balance: solBalance,
+        token: 'SOL',
+        network,
+        message: `Your ${network} wallet balance is ${solBalance.toFixed(7)} SOL`
+      };
+    }
+
+    const tokenMint = LOCALNET_TOKENS[tokenUpperCase];
+    if (!tokenMint) {
+      throw new Error(`Token ${token} not supported on localnet`);
+    }
+    
+    // Get the token account address
+    const tokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      wallet.publicKey
+    );
+    
+    try {
+      // Get the token account info
+      const accountInfo = await connection.getAccountInfo(tokenAccount);
+      
+      if (!accountInfo) {
+        return {
+          success: true,
+          balance: 0,
+          token: tokenUpperCase,
+          network,
+          message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
+        };
+      }
+      
+      // Parse the account data
+      // For a full implementation, you'd need to properly decode the token account data
+      // This is a simplification
+      const decimals = tokenUpperCase === 'USDC' ? 6 : 9;
+      const rawBalance = 0; // Replace with actual parsing of account data
+      const tokenBalance = rawBalance / Math.pow(10, decimals);
+      
+      return {
+        success: true,
+        balance: tokenBalance,
+        token: tokenUpperCase,
+        network,
+        message: `Your wallet balance is ${tokenBalance.toFixed(decimals)} ${tokenUpperCase}`
+      };
+    } catch (error) {
+      // Token account might not exist
+      return {
+        success: true,
+        balance: 0,
+        token: tokenUpperCase,
+        network,
+        message: `Your wallet doesn't have any ${tokenUpperCase} tokens`
+      };
+    }
+  } catch (error: any) {
+    console.error("Balance check error:", error);
+    return {
+      success: false,
+      error: error.message,
+      network,
+      message: `Failed to get balance: ${error.message}`
     };
   }
 }

@@ -3,9 +3,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export interface PaymentInstruction {
   isPayment: boolean;
+  isBalanceCheck?: boolean;
   token?: string;
   amount?: number;
   recipient?: string;
+  network? : "localnet" | "devnet" | "mainnet";
   confidence: number;
   raw?: any;
 }
@@ -52,13 +54,23 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     
     const prompt = `
     You are a cryptocurrency payment parser for a Solana wallet app running on localnet (localhost).
+
+    Parse the following message for either:
+    1. A cryptocurrency payment instruction, or
+    2. A balance check request.
     
-    Parse the following message for a cryptocurrency payment instruction.
     Extract the following information if present:
     1. Is this a payment instruction? (true/false)
-    2. Amount to be sent (number)
-    3. Cryptocurrency token (e.g., SOL, USDC)
-    4. Recipient address
+    2. Is this a balance check request? (true/false)
+    3. Amount to be sent (number) - for payments only
+    4. Cryptocurrency token (e.g., SOL, USDC)
+    5. Recipient address - for payments only
+    6. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    
+    For example:
+    - "Check my balance on devnet" -> network = "devnet"
+    - "What's my SOL balance on localnet?" -> network = "localnet"
+    - "Balance" -> network = "localnet" (default)
     
     For testing on localnet, always assume SOL is the default token if none is specified.
     Solana addresses are 32-44 characters long and consist of letters and numbers.
@@ -68,6 +80,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     Respond in JSON format only:
     {
       "isPayment": true/false,
+      "isBalanceCheck": true/false,
       "amount": number or null,
       "token": "SOL" or other token name, or null,
       "recipient": "address" or null,
@@ -92,10 +105,12 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     // Format and validate the response
     return {
       isPayment: !!parsedResult.isPayment,
+      isBalanceCheck: !!parsedResult.isBalanceCheck,
       amount: typeof parsedResult.amount === 'number' ? parsedResult.amount : 
               (parsedResult.amount === null ? undefined : parseFloat(parsedResult.amount)),
       token: parsedResult.token || "SOL", // Default to SOL for localnet
       recipient: parsedResult.recipient || undefined,
+      network: parsedResult.network || "localnet",
       confidence: parsedResult.confidence || 0.8,
       raw: parsedResult
     };
@@ -110,16 +125,46 @@ function parseWithRegex(message: string): PaymentInstruction {
   // Convert message to lowercase for case-insensitive matching
   const lowerMessage = message.toLowerCase();
   
+  let network: "localnet" | "devnet" | "mainnet" = "localnet";
+
+  if(lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
+    network = "devnet";
+  }else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
+    network = "mainnet";
+  }else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
+    network = "localnet"
+  }
   // Common payment keywords
   const paymentKeywords = ['send', 'transfer', 'pay'];
+  const balanceKeywords = ['balance', 'check balance', 'how much','show balance','available balance'];
   const tokenTypes = ['usdc', 'sol', 'usdt', 'eth'];
   
   // Check if the message contains payment intent
   const hasPaymentKeyword = paymentKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  
+  const isBalanceCheck = balanceKeywords.some(keyword => lowerMessage.includes(keyword));
+  if (isBalanceCheck) {
+    let token = 'SOL';
+    for (const tokenType of tokenTypes) {
+      if (lowerMessage.includes(tokenType)) {
+        token = tokenType.toUpperCase();
+        break;
+      }
+    }
+
+    return {
+      isPayment: false,
+      isBalanceCheck: true,
+      token,
+      network,
+      confidence: 0.8,
+    }
+  }
+  
   if (!hasPaymentKeyword) {
     return { isPayment: false, confidence: 0.9 };
   }
-
   // Pattern for "send X [TOKEN] to [ADDRESS]"
   // Improved regex that's more flexible with formatting
   const simplePaymentRegex = /(?:send|transfer|pay)\s+(\d+(?:\.\d+)?)\s*(usdc|sol|usdt|eth)?\s+(?:to|for)?\s*([a-zA-Z0-9]{32,44})/i;

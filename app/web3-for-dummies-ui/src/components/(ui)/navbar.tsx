@@ -32,6 +32,8 @@ import { ModeToggle } from "@/components/(ui)/mode-toggle";
 import { Button } from "@/components/ui/button";
 import { Bell } from "lucide-react";
 import { usePathname } from "next/navigation";
+import { WalletButton } from "../wallet/wallet-button";
+import { NetworkSwitcher } from "./NetworkSwitcher";
 
 
 export function Navbar({ title }: { title: string }) {
@@ -46,9 +48,7 @@ export function Navbar({ title }: { title: string }) {
           <Bell className="h-5 w-5" />
         </Button>
         <ModeToggle />
-        <Button variant="ghost" size="icon">
-          <Bell className="h-5 w-5" />
-        </Button>
+        <WalletButton />
       </div>
     </header>
   );
