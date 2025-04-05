@@ -13,6 +13,8 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { parsePaymentInstruction } from "@/services/nlp-service";
 import { executePayment, getWalletBalance } from "@/services/solana-service";
 import { WalletButton } from "@/components/wallet/wallet-button";
+import { NetworkSwitcher } from "../(ui)/NetworkSwitcher";
+import { NetworkDisplay } from "../(ui)/NetworkDisplay";
 
 interface Message {
   id: string; // Change from number to string
@@ -25,6 +27,8 @@ export function ChatInterface() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const networkOptions = ["localnet", "devnet", "mainnet"] as const;
+  const [network, setNetwork] = useState<"localnet" | "devnet" | "mainnet">(networkOptions[0]);
   
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
@@ -53,6 +57,35 @@ export function ChatInterface() {
     }
   }, [messages]);
 
+  // useEffect(() => {
+  //   // Only update URL if it doesn't already match the current network
+  //   const params = new URLSearchParams(window.location.search);
+  //   const currentNetworkParam = params.get('network');
+    
+  //   // Only redirect if the URL param doesn't match the selected network
+  //   if (currentNetworkParam !== network) {
+  //     // Use history.replaceState instead of redirecting to avoid page reload
+  //     const newUrl = window.location.origin + "/chat?network=" + network;
+  //     window.history.replaceState({}, '', newUrl);
+  //   }
+  // }, [network]);
+  
+  // // Add another useEffect to read from URL params on component mount
+  // useEffect(() => {
+  //   const params = new URLSearchParams(window.location.search);
+  //   const networkParam = params.get('network');
+  //   if (networkParam === 'devnet' || networkParam === 'localnet' || networkParam === 'mainnet') {
+  //     setNetwork(networkParam as "localnet" | "devnet" | "mainnet");
+  //   }
+  // }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const networkParam = params.get('network');
+    if (networkParam === 'devnet' || networkParam === 'localnet' || networkParam === 'mainnet') {
+      setNetwork(networkParam as "localnet" | "devnet" | "mainnet");
+    }
+  }, []);
+
   const handleSend = async () => {
     if (!input.trim()) return;
 
@@ -74,6 +107,32 @@ export function ChatInterface() {
       const parsedInstruction = await parsePaymentInstruction(userInput);
     
     console.log("Parsed instruction:", parsedInstruction);
+
+    if (parsedInstruction.isBalanceCheck || parsedInstruction.isPayment) {
+      const userInputLower = userInput.toLowerCase();
+      
+      // If user specifies a network that's different from the current one
+      if ((userInputLower.includes("devnet") && network !== "devnet") || 
+          (userInputLower.includes("mainnet") && network !== "mainnet") ||
+          ((userInputLower.includes("localnet") || userInputLower.includes("local")) && network !== "localnet")) {
+        
+        // Extract the network from user input
+        let requestedNetwork = "localnet";
+        if (userInputLower.includes("devnet")) requestedNetwork = "devnet";
+        if (userInputLower.includes("mainnet")) requestedNetwork = "mainnet";
+        
+        // Tell the user we need to switch networks
+        addAIMessage(`To perform this action on ${requestedNetwork}, I need to switch networks. Redirecting...`);
+        
+        // Short delay before redirect
+        setTimeout(() => {
+          window.location.href = `/chat?network=${requestedNetwork}`;
+        }, 1500);
+        
+        setIsLoading(false);
+        return;
+      }
+    }
 
     if (parsedInstruction.isBalanceCheck) {
       if(!wallet.connected) {
@@ -125,32 +184,52 @@ export function ChatInterface() {
         return;
       }
 
-      let network = parsedInstruction.network || "localnet";
-      const userInputLower = userInput.toLowerCase();
+      // let network = parsedInstruction.network || "localnet";
+      // const userInputLower = userInput.toLowerCase();
 
-      if (userInputLower.includes("devnet") && network !== "devnet") {
-        console.log("Force setting network to devnet based on user input");
-        network = "devnet";
-      } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
-        console.log("Force setting network to mainnet based on user input");
-        network = "mainnet";
-      } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
-        console.log("Force setting network to localnet based on user input");
-        network = "localnet";
-      }
+      // if (userInputLower.includes("devnet") && network !== "devnet") {
+      //   console.log("Force setting network to devnet based on user input");
+      //   network = "devnet";
+      // } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
+      //   console.log("Force setting network to mainnet based on user input");
+      //   network = "mainnet";
+      // } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
+      //   console.log("Force setting network to localnet based on user input");
+      //   network = "localnet";
+      // }
       
-      // Request payment confirmation
-      addAIMessage(`I'll help you send ${parsedInstruction.amount} ${parsedInstruction.token} to ${parsedInstruction.recipient}. Please confirm this transaction.`);
+      // // Request payment confirmation
+      // addAIMessage(`I'll help you send ${parsedInstruction.amount} ${parsedInstruction.token} to ${parsedInstruction.recipient}. Please confirm this transaction.`);
         
-        // Execute payment
-        const result = await executePayment(
-          connection,
-          wallet,
-          parsedInstruction.recipient!,
-          parsedInstruction.amount!,
-          parsedInstruction.token,
-          network
-        );
+      //   // Execute payment
+      //   const result = await executePayment(
+      //     connection,
+      //     wallet,
+      //     parsedInstruction.recipient!,
+      //     parsedInstruction.amount!,
+      //     parsedInstruction.token,
+      //     network
+      //   );
+      const params = new URLSearchParams(window.location.search);
+      const urlNetwork = params.get('network');
+      const effectiveNetwork = (urlNetwork === 'devnet' || urlNetwork === 'mainnet') 
+        ? urlNetwork 
+        : 'localnet';
+        
+      console.log(`Using network from URL: ${effectiveNetwork}`);
+      
+      // Request payment confirmation with correct network
+      addAIMessage(`I'll help you send ${parsedInstruction.amount} ${parsedInstruction.token} to ${parsedInstruction.recipient} on ${effectiveNetwork}. Please confirm this transaction.`);
+        
+      // Execute payment using the network from URL
+      const result = await executePayment(
+        connection,
+        wallet,
+        parsedInstruction.recipient!,
+        parsedInstruction.amount!,
+        parsedInstruction.token,
+        effectiveNetwork as "localnet" | "devnet" | "mainnet"
+      );
         
         if (result.success) {
           // Add explorer link to the success message
@@ -292,8 +371,12 @@ export function ChatInterface() {
 
   return (
     <Card className="flex flex-col min-h-[96vh]">
-      <div className="p-4 border-b flex justify-between items-center">
+    <div className="p-4 border-b flex justify-between items-center">
       <h2 className="text-xl font-bold">Web3 Assistant</h2>
+      <div className="flex items-center gap-2">
+        <NetworkDisplay />
+        <NetworkSwitcher />
+      </div>
       {isClient && <WalletButton />}
     </div>
       <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>

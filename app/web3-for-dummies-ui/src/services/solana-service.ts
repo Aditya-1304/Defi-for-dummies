@@ -54,35 +54,78 @@ export async function executePayment(
     
     // Handle SOL transfers differently (they don't use token accounts)
     if (tokenUpperCase === 'SOL' && !LOCALNET_TOKENS.SOL) {
-      // Create a simple SOL transfer transaction
-      const transaction = new Transaction().add(
-        web3.SystemProgram.transfer({
+      
+      console.log(`Creating SOL transfer on ${network} with connection endpoint: ${networkConnection.rpcEndpoint}`);
+  
+      try {
+        // Create a simple transfer instruction
+        const transferInstruction = web3.SystemProgram.transfer({
           fromPubkey: wallet.publicKey,
           toPubkey: new PublicKey(recipient),
           lamports: amount * web3.LAMPORTS_PER_SOL
-        })
-      );
-      
-      // Sign and send transaction
-      const signature = await wallet.sendTransaction(transaction, networkConnection);
-      await networkConnection.confirmTransaction(signature, 'confirmed');
-      
-      let explorerUrl;
-      if (network === "localnet"){
-        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
-      }else if (network === "devnet") {
-        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-      }else if (network === "mainnet") {
-        explorerUrl = `https://explorer.solana.com/tx/${signature}`;
-      }
+        });
+    
+        // Get the latest blockhash using the SAME connection object
+        const { blockhash, lastValidBlockHeight } = await networkConnection.getLatestBlockhash();
+        console.log(`Got blockhash: ${blockhash} from network: ${network}`);
+        
+        // Create transaction and add our transfer instruction
+        const transaction = new Transaction();
+        transaction.add(transferInstruction);
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = wallet.publicKey;
+        
+        // Have the wallet sign the transaction
+        const signedTransaction = await wallet.signTransaction(transaction);
+        console.log("Transaction signed successfully");
+        
+        // Now send the signed transaction with our connection
+        const signature = await networkConnection.sendRawTransaction(signedTransaction.serialize());
+        console.log("Raw transaction sent with signature:", signature);
+        
+        // Wait for confirmation
+        console.log("Waiting for confirmation...");
+        const confirmation = await networkConnection.confirmTransaction({
+          signature,
+          blockhash,
+          lastValidBlockHeight
+        });
+        
+        if (confirmation.value.err) {
+          throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+        }
+        
+        console.log("Transaction confirmed successfully!");
+        
+        // Create explorer URL
+        let explorerUrl;
+        if (network === "localnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+        } else if (network === "devnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+        } else if (network === "mainnet") {
+          explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+        }
+        
+        return {
+          success: true,
+          signature,
+          explorerUrl,
+          network,
+          message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...on ${network}`
+        };
+    } catch (error) {
+      console.error("Transaction error:", error);
 
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const logs = (error as any)?.logs || [];
+      
       return {
-        success: true,
-        signature,
-        explorerUrl,
-        network,
-        message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...`
-      };
+        success: false,
+        error: errorMessage,
+        message: `Transaction failed on ${network}. ${errorMessage}${logs}`
+      }
+    }
     }
     
     // Token transfers (for USDC etc.)
