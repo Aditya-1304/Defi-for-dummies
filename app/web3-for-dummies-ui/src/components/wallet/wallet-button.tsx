@@ -16,7 +16,7 @@ export function WalletButton() {
 
   // During SSR, hide the button to prevent hydration mismatch
   if (!mounted) {
-    return <Button variant="outline" disabled>Connect Wallet</Button>;
+    return <Button variant="outline" size={"lg"} disabled>Connect Wallet</Button>;
   }
 
   return (

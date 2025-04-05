@@ -1,7 +1,6 @@
 "use client";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 
 export function NetworkSwitcher() {
@@ -11,14 +10,15 @@ export function NetworkSwitcher() {
   const handleNetworkChange = (network: string) => {
     console.log("Network change requested:", network);
     
-    // Force a COMPLETE page reload (not just a client-side navigation)
-    // This is critical for the wallet adapter to reconnect properly
+    // Preserve other query parameters if any
+    const newParams = new URLSearchParams(window.location.search);
+    newParams.set('network', network);
+    
+    // Force a COMPLETE page reload with new URL
     const baseUrl = window.location.origin + "/chat";
-    const fullUrl = `${baseUrl}?network=${network}`;
+    const fullUrl = `${baseUrl}?${newParams.toString()}`;
     
     console.log("Reloading page with new URL:", fullUrl);
-    
-    // This is the key difference - using location.href triggers a full page reload
     window.location.href = fullUrl;
   };
 

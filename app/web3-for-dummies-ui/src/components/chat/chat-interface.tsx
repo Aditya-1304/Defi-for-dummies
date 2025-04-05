@@ -13,7 +13,7 @@ import { executePayment, getWalletBalance } from "@/services/solana-service"
 import { WalletButton } from "@/components/wallet/wallet-button"
 import { NetworkSwitcher } from "../(ui)/NetworkSwitcher"
 import { NetworkDisplay } from "../(ui)/NetworkDisplay"
-
+import { Trash2 } from "lucide-react"
 interface Message {
   id: string // Change from number to string
   content: string
@@ -29,14 +29,7 @@ export function ChatInterface() {
   const [network, setNetwork] = useState<"localnet" | "devnet" | "mainnet">(networkOptions[0])
 
   const [isLoading, setIsLoading] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "initial-message",
-      content: "Hello! I'm your DeFi companion. How can I help you today?",
-      sender: "ai",
-      timestamp: new Date().toISOString(), // Store as string
-    },
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [isClient, setIsClient] = useState(false)
 
@@ -79,10 +72,63 @@ export function ChatInterface() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const networkParam = params.get("network")
-    if (networkParam === "devnet" || networkParam === "localnet" || networkParam === "mainnet") {
-      setNetwork(networkParam as "localnet" | "devnet" | "mainnet")
+    // if (networkParam === "devnet" || networkParam === "localnet" || networkParam === "mainnet") {
+    //   setNetwork(networkParam as "localnet" | "devnet" | "mainnet")
+    // }
+    const currentNetwork = networkParam === "devnet" || networkParam === "mainnet" ? networkParam : "localnet"
+
+    setNetwork(currentNetwork as "localnet" | "devnet" | "mainnet")
+
+    if (typeof window !== 'undefined') {
+      const storedMessages = localStorage.getItem(`chat_messages_${currentNetwork}`)
+      
+      if (storedMessages) {
+        try {
+          const parsedMessages = JSON.parse(storedMessages)
+          setMessages(parsedMessages)
+        } catch (e) {
+          console.error("Error parsing stored messages:", e)
+          // If parsing fails, set default welcome message
+          setDefaultWelcomeMessage(currentNetwork)
+        }
+      } else {
+        // No stored messages, set default welcome message
+        setDefaultWelcomeMessage(currentNetwork)
+      }
     }
   }, [])
+  const setDefaultWelcomeMessage = (currentNetwork: string) => {
+    setMessages([
+      {
+        id: "initial-message",
+        content: `Hello! I'm your DeFi companion on ${currentNetwork}. How can I help you today?`,
+        sender: "ai",
+        timestamp: new Date().toISOString(),
+      },
+    ])
+  }
+  useEffect(() => {
+    if (typeof window !== 'undefined' && messages.length > 0) {
+      localStorage.setItem(`chat_messages_${network}`, JSON.stringify(messages))
+    }
+  }, [messages, network])
+
+  const handleNewChat = () => {
+    // Clear messages in state
+    const welcomeMessage = {
+      id: `welcome-${Date.now()}`,
+      content: `Starting a new conversation on ${network}. How can I help you today?`,
+      sender: "ai" as const,
+      timestamp: new Date().toISOString(),
+    };
+    
+    setMessages([welcomeMessage]);
+    
+    // Clear stored messages for current network
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`chat_messages_${network}`, JSON.stringify([welcomeMessage]));
+    }
+  }
 
   const handleSend = async () => {
     if (!input.trim()) return
@@ -140,23 +186,31 @@ export function ChatInterface() {
           return
         }
         const token = parsedInstruction.token || "SOL"
-        let network = parsedInstruction.network || "localnet"
+        const params = new URLSearchParams(window.location.search)
+        const urlNetwork = params.get("network")
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet"
+        
+        // Start with the URL network as default
+        let network = effectiveNetwork
+        
         const userInputLower = userInput.toLowerCase()
-        if (userInputLower.includes("devnet") && network !== "devnet") {
-          console.log("Force setting network to devnet based on user input")
+        if (userInputLower.includes("devnet")) {
+          console.log("Using devnet based on user input")
           network = "devnet"
-        } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
-          console.log("Force setting network to mainnet based on user input")
+        } else if (userInputLower.includes("mainnet")) {
+          console.log("Using mainnet based on user input") 
           network = "mainnet"
         } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
-          console.log("Force setting network to localnet based on user input")
+          console.log("Using localnet based on user input")
           network = "localnet"
+        } else {
+          console.log(`Using current URL network: ${network}`)
         }
 
         console.log(`Checking balance on network: ${network}`)
         addAIMessage(`Checking your ${token} balance on ${network}...`)
 
-        const result = await getWalletBalance(connection, wallet, token, network)
+        const result = await getWalletBalance(connection, wallet, token, network as "localnet" | "devnet" | "mainnet")
 
         if (result.success) {
           addAIMessage(`💰 ${result.message}`)
@@ -379,9 +433,20 @@ export function ChatInterface() {
     <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
       <div className="p-4 border-b border-gray-800 dark:border-gray-800 light:border-gray-200 flex justify-between items-center">
         <h2 className="text-xl font-bold">Web3 Assistant</h2>
+        
         {/* <div className="flex items-center gap-3">
           {isClient && <WalletButton />} */}
           <div className="flex items-center gap-2">
+          <Button 
+            onClick={handleNewChat}
+            variant="ghost" 
+            size="sm"
+            className="text-gray-400 hover:text-white"
+            title="New Chat"
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            <span className="text-sm">New Chat</span>
+          </Button>
             {/* <NetworkDisplay /> */}
             <NetworkSwitcher />
           </div>
