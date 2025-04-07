@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, getWalletBalance } from "@/services/solana-service"
+import { executePayment, getWalletBalance, mintTestTokens } from "@/services/solana-service"
 import { WalletButton } from "@/components/wallet/wallet-button"
 import { NetworkSwitcher } from "../(ui)/NetworkSwitcher"
 import { NetworkDisplay } from "../(ui)/NetworkDisplay"
@@ -215,11 +215,46 @@ export function ChatInterface() {
         if (result.success) {
           addAIMessage(`💰 ${result.message}`)
         } else {
-          addAIMessage(`❌ ${result.message}`)
+          addAIMessage(`❌ ${result?.message || 'Transaction failed'}`)
         }
         setIsLoading(false)
         return
       }
+
+      // In your handleSend function in chat-interface.tsx, add handling for mint requests
+if (parsedInstruction.isMintRequest) {
+  if (!wallet.connected) {
+    addAIMessage("Please connect your wallet to mint tokens.");
+    setIsLoading(false);
+    return;
+  }
+  
+  const token = parsedInstruction.token || "USDC";
+  const amount = parsedInstruction.amount || 100;
+  
+  const params = new URLSearchParams(window.location.search);
+  const urlNetwork = params.get("network");
+  const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+  
+  addAIMessage(`Minting ${amount} ${token} tokens on ${effectiveNetwork}...`);
+  
+  const result = await mintTestTokens(
+    connection,
+    wallet,
+    token,
+    amount,
+    effectiveNetwork as "localnet" | "devnet" | "mainnet"
+  );
+  
+  if (result.success) {
+    addAIMessage(`✅ ${result.message}`);
+  } else {
+    addAIMessage(`❌ ${result.message}`);
+  }
+  
+  setIsLoading(false);
+  return;
+}
 
       // Lower the confidence threshold for Gemini
       if (parsedInstruction.isPayment && parsedInstruction.confidence > 0.5) {
@@ -286,7 +321,7 @@ export function ChatInterface() {
           effectiveNetwork as "localnet" | "devnet" | "mainnet",
         )
 
-        if (result.success) {
+        if (result && result.success) {
           // Add explorer link to the success message
           addAIMessage(
             `✅ ${result.message}\n\n` +
@@ -294,7 +329,7 @@ export function ChatInterface() {
               `View in [Solana Explorer](${result.explorerUrl})`,
           )
         } else {
-          addAIMessage(`❌ ${result.message}`)
+          addAIMessage(`❌ ${result?.message || 'Transaction failed'}`)
         }
       } else if (parsedInstruction.isPayment) {
         addAIMessage(

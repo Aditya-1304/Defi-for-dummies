@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 export interface PaymentInstruction {
   isPayment: boolean;
   isBalanceCheck?: boolean;
+  isMintRequest?: boolean;
   token?: string;
   amount?: number;
   recipient?: string;
@@ -58,17 +59,26 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     Parse the following message for either:
     1. A cryptocurrency payment instruction, or
     2. A balance check request.
+    3. A token minting request (new feature)
     
     Extract the following information if present:
     1. Is this a payment instruction? (true/false)
     2. Is this a balance check request? (true/false)
-    3. Amount to be sent (number) - for payments only
-    4. Cryptocurrency token (e.g., SOL, USDC)
-    5. Recipient address - for payments only
-    6. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    3. Is this a token minting request? (true/false)
+    4. Amount to be sent or minted (number) - for payments or minting
+    5. Cryptocurrency token (e.g., SOL, USDC)
+    6. Recipient address - for payments only
+    7. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+
+    For token minting requests: 
+    - "mint 100 USDC" means create 100 USDC tokens
+    - "create BONK token" means mint 100 BONK tokens (default amount)
+    - "mint JUP" means mint 100 JUP tokens (default amount)
     
     For example:
-    - "Check my balance on devnet" -> network = "devnet"
+  - "Check my balance on devnet" -> network = "devnet" , isBalanceCheck = true
+    - "Send 10 SOL to FwPnvvnMK2RVmZjaBwCZ6wgiNuAFkz4k1qvT36fkHojS" -> isPayment = true
+    - "Mint 500 USDC" -> isMintRequest = true, amount = 500, token = "USDC"
     - "What's my SOL balance on localnet?" -> network = "localnet"
     - "Balance" -> network = "localnet" (default)
     
@@ -81,8 +91,10 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     {
       "isPayment": true/false,
       "isBalanceCheck": true/false,
+      isMintRequest: true/false,
       "amount": number or null,
       "token": "SOL" or other token name, or null,
+      "network": "localnet" or "devnet" or "mainnet",
       "recipient": "address" or null,
       "confidence": number between 0 and 1
     }
@@ -106,6 +118,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     return {
       isPayment: !!parsedResult.isPayment,
       isBalanceCheck: !!parsedResult.isBalanceCheck,
+      isMintRequest: !!parsedResult.isMintRequest,
       amount: typeof parsedResult.amount === 'number' ? parsedResult.amount : 
               (parsedResult.amount === null ? undefined : parseFloat(parsedResult.amount)),
       token: parsedResult.token || "SOL", // Default to SOL for localnet
@@ -133,6 +146,40 @@ function parseWithRegex(message: string): PaymentInstruction {
     network = "mainnet";
   }else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
     network = "localnet"
+  }
+
+  if (lowerMessage.includes('mint') || 
+      (lowerMessage.includes('create') && lowerMessage.includes('token'))) {
+    
+    // Extract token symbol (default to USDC if not specified)
+    let token = 'USDC';
+    let amount = 100; // Default amount
+    
+    const tokenMatches = lowerMessage.match(/mint\s+(\d+)\s+([a-z]+)/i) || 
+                          lowerMessage.match(/create\s+(\d+)\s+([a-z]+)/i) ||
+                          lowerMessage.match(/mint\s+([a-z]+)/i) ||
+                          lowerMessage.match(/create\s+([a-z]+)\s+token/i);
+    
+    if (tokenMatches && tokenMatches.length > 1) {
+      if (tokenMatches.length > 2) {
+        // Format is "mint 100 USDC"
+        amount = parseFloat(tokenMatches[1]);
+        token = tokenMatches[2].toUpperCase();
+      } else {
+        // Format is "mint USDC"
+        token = tokenMatches[1].toUpperCase();
+      }
+    }
+    
+    return {
+      isPayment: false,
+      isBalanceCheck: false,
+      isMintRequest: true,
+      token,
+      amount,
+      network,
+      confidence: 0.9
+    };
   }
   // Common payment keywords
   const paymentKeywords = ['send', 'transfer', 'pay'];
