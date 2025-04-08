@@ -5,6 +5,7 @@ import { FC, ReactNode, useEffect, useMemo, useState } from 'react';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
+import { preloadTokensFromLocalStorage } from '@/services/tokens-service';
 
 // Import wallet adapter styles
 import '@solana/wallet-adapter-react-ui/styles.css';
@@ -35,6 +36,14 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     
     console.log("WalletProvider: URL network parameter =", networkParam);
     console.log("Current network in state =", network);
+
+    setTimeout(() => {
+      console.log("Starting token preload...");
+      preloadTokensFromLocalStorage();
+      console.log("Token preload complete");
+    }, 0);
+
+    console.log("WalletProvider: URL network parameter =", networkParam);
     
     // Get current endpoint from connection (if it exists)
     const currentEndpoint = window.localStorage.getItem('network');

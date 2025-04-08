@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 export interface PaymentInstruction {
   isPayment: boolean;
   isBalanceCheck?: boolean;
+  isCompleteBalanceCheck?: boolean;
   isMintRequest?: boolean;
   token?: string;
   amount?: number;
@@ -64,11 +65,17 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     Extract the following information if present:
     1. Is this a payment instruction? (true/false)
     2. Is this a balance check request? (true/false)
-    3. Is this a token minting request? (true/false)
-    4. Amount to be sent or minted (number) - for payments or minting
-    5. Cryptocurrency token (e.g., SOL, USDC)
-    6. Recipient address - for payments only
-    7. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    3. Is this a complete balance check request without specific token? (true/false)
+    4. Is this a token minting request? (true/false)
+    5. Amount to be sent or minted (number) - for payments or minting
+    6. Cryptocurrency token (e.g., SOL, USDC)
+    7. Recipient address - for payments only
+    8. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+
+
+    For balance check requests:
+    - If user just types "balance", "show balance", "show all balances" or similar without specifying any token, mark as isCompleteBalanceCheck = true
+    - If specific token is mentioned (like "SOL balance"), set token = "SOL" and isCompleteBalanceCheck = false
 
     For token minting requests: 
     - "mint 100 USDC" means create 100 USDC tokens
@@ -91,7 +98,8 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     {
       "isPayment": true/false,
       "isBalanceCheck": true/false,
-      isMintRequest: true/false,
+      "isCompleteBalanceCheck": true/false,
+      "isMintRequest": true/false,
       "amount": number or null,
       "token": "SOL" or other token name, or null,
       "network": "localnet" or "devnet" or "mainnet",
@@ -118,6 +126,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     return {
       isPayment: !!parsedResult.isPayment,
       isBalanceCheck: !!parsedResult.isBalanceCheck,
+      isCompleteBalanceCheck: !!parsedResult.isCompleteBalanceCheck,
       isMintRequest: !!parsedResult.isMintRequest,
       amount: typeof parsedResult.amount === 'number' ? parsedResult.amount : 
               (parsedResult.amount === null ? undefined : parseFloat(parsedResult.amount)),
@@ -192,6 +201,13 @@ function parseWithRegex(message: string): PaymentInstruction {
   
   const isBalanceCheck = balanceKeywords.some(keyword => lowerMessage.includes(keyword));
   if (isBalanceCheck) {
+
+    let isCompleteBalanceCheck = lowerMessage === 'balance' || 
+                               lowerMessage === 'show balance' || 
+                               lowerMessage === 'show all balances' ||
+                               lowerMessage === 'check balance' ||
+                               lowerMessage === 'wallet balance';
+
     let token = 'SOL';
     for (const tokenType of tokenTypes) {
       if (lowerMessage.includes(tokenType)) {
@@ -203,6 +219,7 @@ function parseWithRegex(message: string): PaymentInstruction {
     return {
       isPayment: false,
       isBalanceCheck: true,
+      isCompleteBalanceCheck,
       token,
       network,
       confidence: 0.8,

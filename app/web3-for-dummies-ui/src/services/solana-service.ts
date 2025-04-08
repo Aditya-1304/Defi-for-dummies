@@ -373,3 +373,91 @@ export async function mintTestTokens(
     };
   }
 };
+
+export async function getAllWalletBalances(
+  connection: web3.Connection,
+  wallet: any,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+) {
+  try {
+    if (!wallet.publicKey) throw new Error("Wallet not connected");
+    
+    console.log(`🌐 Getting all balances on ${network} network`);
+    
+    if (network === "mainnet") {
+      return {
+        success: false,
+        error: "Mainnet balance checks unavailable",
+        message: "Mainnet balance checks are unavailable in demo mode. Please use devnet or localnet."
+      };
+    }
+    
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed");
+    
+    // Start with SOL balance
+    const solBalance = await networkConnection.getBalance(wallet.publicKey);
+    const solBalanceInSOL = solBalance / web3.LAMPORTS_PER_SOL;
+    
+    const balances = [
+      {
+        token: 'SOL',
+        balance: solBalanceInSOL,
+        decimals: 9
+      }
+    ];
+    
+    // Get balances for all cached tokens in this network
+    const tokenSymbols = Object.keys(tokenCache[network] || {});
+    
+    for (const symbol of tokenSymbols) {
+      try {
+        const { balance, decimals } = await getTokenBalance(
+          networkConnection,
+          wallet,
+          symbol,
+          network
+        );
+        
+        // Always include tokens that exist in our cache, even with zero balance
+        balances.push({
+          token: symbol,
+          balance,
+          decimals
+        });
+      } catch (error) {
+        console.warn(`Failed to get balance for ${symbol}:`, error);
+        // Continue to the next token
+      }
+    }
+    
+    // Format the message
+    const tokens = balances.map(b => 
+      `${b.balance.toFixed(b.token === 'SOL' ? 7 : 2)} ${b.token}`
+    );
+    
+    let message;
+    if (balances.length > 1) {
+      message = `Your ${network} wallet balances:\n• ${tokens.join('\n• ')}`;
+    } else if (balances.length === 1) {
+      message = `Your ${network} wallet has ${tokens[0]}`;
+    } else {
+      message = `Your ${network} wallet has no tokens`;
+    }
+    
+    return {
+      success: true,
+      balances,
+      network,
+      message
+    };
+  } catch (error: any) {
+    console.error("Balance check error:", error);
+    return {
+      success: false,
+      error: error.message,
+      network,
+      message: `Failed to get balances: ${error.message}`
+    };
+  }
+}

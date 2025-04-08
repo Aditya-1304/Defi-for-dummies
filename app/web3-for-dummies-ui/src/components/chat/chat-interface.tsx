@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, getWalletBalance, mintTestTokens } from "@/services/solana-service"
+import { executePayment, getWalletBalance, mintTestTokens , getAllWalletBalances } from "@/services/solana-service"
 import { WalletButton } from "@/components/wallet/wallet-button"
 import { NetworkSwitcher } from "../(ui)/NetworkSwitcher"
 import { NetworkDisplay } from "../(ui)/NetworkDisplay"
@@ -185,7 +185,8 @@ export function ChatInterface() {
           setIsLoading(false)
           return
         }
-        const token = parsedInstruction.token || "SOL"
+        
+        // Get network from URL or user input
         const params = new URLSearchParams(window.location.search)
         const urlNetwork = params.get("network")
         const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet"
@@ -206,17 +207,43 @@ export function ChatInterface() {
         } else {
           console.log(`Using current URL network: ${network}`)
         }
-
-        console.log(`Checking balance on network: ${network}`)
-        addAIMessage(`Checking your ${token} balance on ${network}...`)
-
-        const result = await getWalletBalance(connection, wallet, token, network as "localnet" | "devnet" | "mainnet")
-
-        if (result.success) {
-          addAIMessage(`💰 ${result.message}`)
+        
+        // Check if this is a complete balance check or specific token check
+        if (parsedInstruction.isCompleteBalanceCheck) {
+          console.log(`Checking all token balances on ${network}`)
+          addAIMessage(`Checking all your token balances on ${network}...`)
+          
+          const result = await getAllWalletBalances(
+            connection, 
+            wallet, 
+            network as "localnet" | "devnet" | "mainnet"
+          )
+          
+          if (result.success) {
+            addAIMessage(`💰 ${result.message}`)
+          } else {
+            addAIMessage(`❌ ${result?.message || 'Failed to get balances'}`)
+          }
         } else {
-          addAIMessage(`❌ ${result?.message || 'Transaction failed'}`)
+          // This is a specific token balance check
+          const token = parsedInstruction.token || "SOL"
+          console.log(`Checking ${token} balance on network: ${network}`)
+          addAIMessage(`Checking your ${token} balance on ${network}...`)
+          
+          const result = await getWalletBalance(
+            connection, 
+            wallet, 
+            token, 
+            network as "localnet" | "devnet" | "mainnet"
+          )
+          
+          if (result.success) {
+            addAIMessage(`💰 ${result.message}`)
+          } else {
+            addAIMessage(`❌ ${result?.message || 'Failed to get balance'}`)
+          }
         }
+        
         setIsLoading(false)
         return
       }
