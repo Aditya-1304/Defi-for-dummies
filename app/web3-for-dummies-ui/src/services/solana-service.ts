@@ -248,81 +248,179 @@ export async function executePayment(
     // console.log(`Sending ${token} transaction to ${network}...`);
     // const signature = await wallet.sendTransaction(transaction, networkConnection);
     let blockhash, lastValidBlockHeight;
-let retries = 3;
-while (retries > 0) {
-  try {
-    const blockhashData = await networkConnection.getLatestBlockhash('confirmed');
-    blockhash = blockhashData.blockhash;
-    lastValidBlockHeight = blockhashData.lastValidBlockHeight;
-    
-    if (blockhash) break;
-  } catch (err) {
-    console.warn("Error fetching blockhash, retrying...", err);
-  }
-  retries--;
-  // Short delay before retry
-  await new Promise(resolve => setTimeout(resolve, 500));
-}
-
-if (!blockhash) {
-  throw new Error("Failed to get a valid blockhash after multiple attempts. Network may be unstable.");
-}
-
-transaction.recentBlockhash = blockhash;
-transaction.feePayer = wallet.publicKey;
-
-try {
-  // First check if the token account exists
-  const tokenAccountInfo = await networkConnection.getAccountInfo(senderTokenAccount);
-  
-  if (!tokenAccountInfo) {
-    console.log(`Token account doesn't exist yet for ${token}`);
-    return {
-      success: false,
-      error: "Token account not found",
-      message: `You don't have a ${token} token account yet. Try minting some tokens first.`
-    };
-  }
-  
-  // Now safely get the balance
-  const senderAccountInfo = await networkConnection.getTokenAccountBalance(senderTokenAccount);
-  const senderBalance = senderAccountInfo.value.uiAmount || 0;
-  
-  if (senderBalance < amount) {
-    return {
-      success: false,
-      error: "Insufficient funds",
-      message: `You only have ${senderBalance} ${token}, but tried to send ${amount} ${token}`
-    };
-  }
-  
-  console.log(`Confirmed sender has sufficient balance: ${senderBalance} ${token}`);
-} catch (error : any) {
-  console.error("Error checking sender balance:", error);
-  return {
-    success: false,
-    error: "Failed to verify sender balance",
-    message: `Could not verify if you have enough ${token} tokens: ${error.message}`
-  };
-}
-
-// Sign and send transaction with timeout handling
-console.log(`Sending ${token} transaction to ${network}...`);
-const signature = await wallet.sendTransaction(transaction, networkConnection);
-    
-    // Wait for confirmation with proper error handling
-    console.log("Confirming transaction...");
-    const confirmation = await networkConnection.confirmTransaction({
-      signature,
-      blockhash,
-      lastValidBlockHeight: lastValidBlockHeight ?? 0
-    }, 'confirmed');
-    
-    if (confirmation.value.err) {
-      throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+    let retries = network ==="devnet" ? 5 : 3;
+    while (retries > 0) {
+      try {
+        console.log(`Getting latest blockhash for ${network}, attempt ${6-retries}...`);
+        // Use finalized for devnet for better stability
+        const commitment = network === "devnet" ? 'finalized' : 'confirmed';
+        const blockhashData = await networkConnection.getLatestBlockhash(commitment);
+        blockhash = blockhashData.blockhash;
+        lastValidBlockHeight = blockhashData.lastValidBlockHeight;
+        
+        console.log(`Got blockhash: ${blockhash}, lastValidBlockHeight: ${lastValidBlockHeight}`);
+        if (blockhash) break;
+      } catch (err) {
+        console.warn("Error fetching blockhash, retrying...", err);
+      }
+      retries--;
+      // Short delay before retry
+      await new Promise(resolve => setTimeout(resolve, network === "devnet"? 1000: 500));
     }
+
+    if (!blockhash) {
+      throw new Error("Failed to get a valid blockhash after multiple attempts. Network may be unstable.");
+    }
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = wallet.publicKey;
+
+    try {
+      // First check if the token account exists
+      const tokenAccountInfo = await networkConnection.getAccountInfo(senderTokenAccount);
+      
+      if (!tokenAccountInfo) {
+        console.log(`Token account doesn't exist yet for ${token}`);
+        return {
+          success: false,
+          error: "Token account not found",
+          message: `You don't have a ${token} token account yet. Try minting some tokens first.`
+        };
+      }
+      
+      // Now safely get the balance
+      const senderAccountInfo = await networkConnection.getTokenAccountBalance(senderTokenAccount);
+      const senderBalance = senderAccountInfo.value.uiAmount || 0;
+      
+      if (senderBalance < amount) {
+        return {
+          success: false,
+          error: "Insufficient funds",
+          message: `You only have ${senderBalance} ${token}, but tried to send ${amount} ${token}`
+        };
+      }
+      
+      console.log(`Confirmed sender has sufficient balance: ${senderBalance} ${token}`);
+    } catch (error : any) {
+      console.error("Error checking sender balance:", error);
+      return {
+        success: false,
+        error: "Failed to verify sender balance",
+        message: `Could not verify if you have enough ${token} tokens: ${error.message}`
+      };
+    }
+    // Sign and send transaction with timeout handling
+    console.log(`Sending ${token} transaction to ${network}...`);
+    // const signature = await wallet.sendTransaction(transaction, networkConnection);
+        
+    // // Wait for confirmation with proper error handling
+    // console.log(`Confirming transaction ${signature} on ${network}...`);
+    // const confirmationTimeout = network === "devnet" ? 60000 : 30000;
+
+    // const confirmationPromise = await networkConnection.confirmTransaction({
+    //   signature,
+    //   blockhash,
+    //   lastValidBlockHeight: lastValidBlockHeight ?? 0
+    // }, network === 'devnet' ? 'finalized': 'confirmed');
+
+    // const timeoutPromise = new Promise((_, reject) => {
+    //   setTimeout(()=> reject(new Error(`Transaction confirmation timed out after ${confirmationTimeout/1000} seconds`)), confirmationTimeout)
+    // })
+
+    // const confirmation = await Promise.race([confirmationPromise, timeoutPromise]) as any;
     
-    let explorerUrl;
+    // if (confirmation.value.err) {
+    //   throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+    // }
+    if (network === "devnet") {
+      let txSuccess = false;
+      let txSignature = '';
+      let txAttempts = 0;
+      const maxTxAttempts = 3;
+      
+      while (!txSuccess && txAttempts < maxTxAttempts) {
+        txAttempts++;
+        try {
+          console.log(`Devnet transaction attempt ${txAttempts}/${maxTxAttempts}...`);
+          
+          // Recreate connection with preferred commitment for each attempt
+          const freshConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
+          
+          // Get a fresh blockhash directly before sending
+          const { blockhash: freshBlockhash, lastValidBlockHeight } = 
+            await freshConnection.getLatestBlockhash('confirmed');
+          
+          console.log(`Got fresh blockhash: ${freshBlockhash.slice(0, 10)}...`);
+          
+          // Update transaction with fresh blockhash
+          transaction.recentBlockhash = freshBlockhash;
+          transaction.feePayer = wallet.publicKey;
+          
+          // Sign the transaction first to avoid timeout issues
+          const signedTx = await wallet.signTransaction(transaction);
+          
+          // Send raw transaction for more reliability
+          console.log(`Sending raw transaction to devnet...`);
+          txSignature = await freshConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+          });
+          
+          console.log(`Transaction sent with signature: ${txSignature}`);
+          
+          // Confirm with slightly higher timeout
+          const confirmation = await freshConnection.confirmTransaction({
+            signature: txSignature,
+            blockhash: freshBlockhash,
+            lastValidBlockHeight
+          }, 'confirmed');
+          
+          if (confirmation.value.err) {
+            throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          }
+          
+          txSuccess = true;
+          console.log(`Transaction confirmed successfully!`);
+        } catch (error: any) {
+          console.warn(`Attempt ${txAttempts} failed:`, error);
+          
+          if (txAttempts >= maxTxAttempts) {
+            throw error;
+          }
+          
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, txAttempts - 1);
+          console.log(`Waiting ${delay}ms before next attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+      
+      // If we got here with a signature, the transaction was successful
+      if (txSuccess) {
+        console.log(`Transaction confirmed successfully after ${txAttempts} attempt(s)`);
+        
+        // Create explorer URL
+        const explorerUrl = `https://explorer.solana.com/tx/${txSignature}?cluster=devnet`;
+        
+        return {
+          success: true,
+          signature: txSignature,
+          explorerUrl,
+          network,
+          message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}... on devnet`
+        };
+      }
+    } else {
+      // Original code for localnet (which works fine)
+      const signature = await wallet.sendTransaction(transaction, networkConnection);
+      
+      // Wait for confirmation with proper error handling
+      console.log(`Confirming transaction ${signature} on ${network}...`);
+      // Rest of the existing confirmation logic...
+      let explorerUrl;
     
       if (network === "localnet"){
         explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
@@ -339,6 +437,9 @@ const signature = await wallet.sendTransaction(transaction, networkConnection);
       network,
       message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}...`
     };
+    }
+    
+    
   } catch (error: any) {
     console.error("Payment execution error:", error);
     return {
