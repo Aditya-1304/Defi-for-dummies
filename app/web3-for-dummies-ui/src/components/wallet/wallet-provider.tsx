@@ -6,6 +6,7 @@ import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { preloadTokensFromLocalStorage } from '@/services/tokens-service';
+import { useNetwork } from '../(ui)/network-context';
 
 // Import wallet adapter styles
 import '@solana/wallet-adapter-react-ui/styles.css';
@@ -16,7 +17,8 @@ interface Props {
 
 export const WalletContextProvider: FC<Props> = ({ children }) => {
 
-  const [network, setNetwork] = useState<'localnet' | 'devnet' | 'mainnet'>('localnet');
+  // const [network, setNetwork] = useState<'localnet' | 'devnet' | 'mainnet'>('localnet');
+  const { network } = useNetwork();
   
   const walletNetwork = useMemo(() => {
     switch(network) {
@@ -49,19 +51,19 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     const currentEndpoint = window.localStorage.getItem('network');
     console.log("Current network in localStorage =", currentEndpoint);
     
-    if (networkParam === 'devnet') {
-      console.log("Setting network to devnet");
-      setNetwork('devnet');
-      window.localStorage.setItem('network', 'devnet');
-    } else if (networkParam === 'mainnet') {
-      console.log("Setting network to mainnet");
-      setNetwork('mainnet');
-      window.localStorage.setItem('network', 'mainnet');
-    } else {
-      console.log("Setting network to localnet");
-      setNetwork('localnet');
-      window.localStorage.setItem('network', 'localnet');
-    }
+    // if (networkParam === 'devnet') {
+    //   console.log("Setting network to devnet");
+    //   setNetwork('devnet');
+    //   window.localStorage.setItem('network', 'devnet');
+    // } else if (networkParam === 'mainnet') {
+    //   console.log("Setting network to mainnet");
+    //   setNetwork('mainnet');
+    //   window.localStorage.setItem('network', 'mainnet');
+    // } else {
+    //   console.log("Setting network to localnet");
+    //   setNetwork('localnet');
+    //   window.localStorage.setItem('network', 'localnet');
+    // }
   }, []);
 
   // Define endpoints for different networks

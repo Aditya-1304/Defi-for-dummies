@@ -1,5 +1,72 @@
 // src/services/nlp-service.ts
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createLogger } from "@/utils/logger";
+
+const logger = createLogger("NLP-Service");
+
+const parsedCommandCache: Record<string, PaymentInstruction> = {};
+
+// Predefined responses for common queries
+const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
+  'balance': {
+    isPayment: false,
+    isBalanceCheck: true,
+    isCompleteBalanceCheck: true,
+    token: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'show balance': {
+    isPayment: false,
+    isBalanceCheck: true,
+    isCompleteBalanceCheck: true,
+    token: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'show all balances': {
+    isPayment: false,
+    isBalanceCheck: true,
+    isCompleteBalanceCheck: true,
+    token: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'wallet balance': {
+    isPayment: false,
+    isBalanceCheck: true,
+    isCompleteBalanceCheck: true,
+    token: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'sol balance': {
+    isPayment: false,
+    isBalanceCheck: true,
+    isCompleteBalanceCheck: false,
+    token: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'mint 100 usdc': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isMintRequest: true,
+    amount: 100,
+    token: 'USDC',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'mint usdc': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isMintRequest: true,
+    amount: 100,
+    token: 'USDC',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+};
 
 export interface PaymentInstruction {
   isPayment: boolean;
@@ -23,15 +90,40 @@ const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
 export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
   try {
+
+    const normalizedInput = message.trim().toLowerCase();
+
+    if (COMMON_PATTERNS[normalizedInput]) {
+      logger.debug('Using predefined pattern match');
+      return COMMON_PATTERNS[normalizedInput];
+    }
+
+    if (parsedCommandCache[normalizedInput]) {
+      logger.debug('Using cached parsing result');
+      return parsedCommandCache[normalizedInput];
+    }
+
+    let result: PaymentInstruction;
     // Only try Gemini if we have an API key
     if (genAI) {
-      console.log("🤖 Attempting to parse with Gemini AI...");
+    logger.debug("🤖 Attempting to parse with Gemini AI...");
       const geminiResult = await parseWithGemini(message);
       if (geminiResult) {
-        console.log("✅ Successfully parsed with Gemini AI", geminiResult);
-        return geminiResult;
+        logger.debug("✅ Successfully parsed with Gemini AI", geminiResult);
+        result = geminiResult;
+
+        if (geminiResult.confidence > 0.7) {
+          parsedCommandCache[normalizedInput] = geminiResult;
+        }
+
+        return result;
       } else {
-        console.log("⚠️ Gemini parsing returned null, falling back to regex");
+        logger.debug("⚠️ Gemini parsing returned null, falling back to regex");
+        result = parseWithRegex(message);
+
+        if( result.confidence > 0.8) {
+          parsedCommandCache[normalizedInput] = result;
+        }
       }
     } else {
       console.warn("⚠️ No Gemini API key found, using regex parser only");

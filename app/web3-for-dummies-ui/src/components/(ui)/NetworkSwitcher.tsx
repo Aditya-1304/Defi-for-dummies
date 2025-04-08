@@ -1,36 +1,21 @@
 "use client";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useSearchParams } from "next/navigation";
+import { useNetwork } from "@/components/(ui)/network-context";
 
 export function NetworkSwitcher() {
-  const searchParams = useSearchParams();
-  const currentNetwork = searchParams.get('network') || 'localnet';
+  const { network, setNetwork } = useNetwork();
 
-  const handleNetworkChange = (network: string) => {
-    console.log("Network change requested:", network);
+  const handleNetworkChange = (newNetwork: string) => {
+    console.log("Network change requested:", newNetwork);
     
-    // Preserve other query parameters if any
-    const newParams = new URLSearchParams(window.location.search);
-    newParams.set('network', network);
-    
-    // Force a COMPLETE page reload with new URL
-    const baseUrl = window.location.origin + "/chat";
-    const fullUrl = `${baseUrl}?${newParams.toString()}`;
-    
-    console.log("Reloading page with new URL:", fullUrl);
-    window.location.href = fullUrl;
+    // Update the network context instead of reloading the page
+    setNetwork(newNetwork as "localnet" | "devnet" | "mainnet");
   };
 
   return (
     <div className="flex items-center gap-2">
-      {/* <span className={`h-2 w-2 rounded-full ${
-        currentNetwork === 'devnet' ? 'bg-yellow-500' : 
-        currentNetwork === 'mainnet' ? 'bg-green-500' : 
-        'bg-blue-500'
-      }`}></span> */}
-      
-      <Select value={currentNetwork} onValueChange={handleNetworkChange}>
+      <Select value={network} onValueChange={handleNetworkChange}>
         <SelectTrigger className="w-[120px]">
           <SelectValue placeholder="Network" />
         </SelectTrigger>
