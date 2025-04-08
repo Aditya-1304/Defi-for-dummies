@@ -62,6 +62,29 @@ export async function getOrCreateToken(
     return tokenCache[network][upperSymbol];
   }
 
+  if(typeof window !== 'undefined') {
+    const cachedToken = localStorage.getItem(`token_${network}_${upperSymbol}`);
+    if (cachedToken) {
+      try {
+        const parsed = JSON.parse(cachedToken);
+        const tokenInfo = {
+          mint: new PublicKey(parsed.address),
+          decimals: parsed.decimals,
+          symbol: upperSymbol,
+          name: `${upperSymbol} Test Token`,
+        };
+
+        tokenCache[network][upperSymbol] = tokenInfo;
+        console.log(`Loaded ${upperSymbol} token from localStorage cache`);
+        return tokenInfo;
+      } catch (error) {
+        console.error(`Error parsing cached token ${upperSymbol} from localStorage:`, error);
+        localStorage.removeItem(`token_${network}_${upperSymbol}`);
+      }
+    }
+  }
+
+
   // 2. If it's a known token on this network, get its info
   if (network !== "localnet" && KNOWN_TOKENS[network]?.[upperSymbol]) {
     try {
@@ -87,7 +110,15 @@ export async function getOrCreateToken(
   // 3. For localnet or if the token isn't known, create a new one
   if (network === "localnet" || network === "devnet") {
     console.log(`Creating new token ${upperSymbol} on ${network}...`);
-    return await createNewToken(connection, wallet, upperSymbol, network);
+    const tokenInfo = await createNewToken(connection, wallet, upperSymbol, network);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`token_${network}_${upperSymbol}`, JSON.stringify({
+        address: tokenInfo.mint.toString(),
+        decimals: tokenInfo.decimals,
+      }));
+    }
+    return tokenInfo;
   }
 
   // 4. If we're on mainnet and token isn't known, we can't create it
@@ -179,68 +210,75 @@ async function createNewToken(
     //   wallet.publicKey
     // );
 
-    const tokenAccountAddress = await getAssociatedTokenAddress(
-      mintKeypair.publicKey,
-      wallet.publicKey
-    );
+    // const tokenAccountAddress = await getAssociatedTokenAddress(
+    //   mintKeypair.publicKey,
+    //   wallet.publicKey
+    // );
 
-    const createAtaTransaction = new Transaction().add(
-      createAssociatedTokenAccountInstruction(
-        wallet.publicKey,
-        tokenAccountAddress,
-        wallet.publicKey,
-        mintKeypair.publicKey
-      )
-    );
+    // const createAtaTransaction = new Transaction().add(
+    //   createAssociatedTokenAccountInstruction(
+    //     wallet.publicKey,
+    //     tokenAccountAddress,
+    //     wallet.publicKey,
+    //     mintKeypair.publicKey
+    //   )
+    // );
 
-    const { blockhash: ataBlockhash } = await connection.getLatestBlockhash();
-    createAtaTransaction.recentBlockhash = ataBlockhash;
-    createAtaTransaction.feePayer = wallet.publicKey;
+    // const { blockhash: ataBlockhash } = await connection.getLatestBlockhash();
+    // createAtaTransaction.recentBlockhash = ataBlockhash;
+    // createAtaTransaction.feePayer = wallet.publicKey;
 
-    const signedAtaTx = await wallet.signTransaction(createAtaTransaction);
-    const ataTxId = await connection.sendRawTransaction(signedAtaTx.serialize());
+    // const signedAtaTx = await wallet.signTransaction(createAtaTransaction);
+    // const ataTxId = await connection.sendRawTransaction(signedAtaTx.serialize());
 
-    await connection.confirmTransaction({
-      signature: ataTxId,
-      blockhash: ataBlockhash,
-      lastValidBlockHeight: await connection.getBlockHeight()
-    }, 'confirmed');
+    // await connection.confirmTransaction({
+    //   signature: ataTxId,
+    //   blockhash: ataBlockhash,
+    //   lastValidBlockHeight: await connection.getBlockHeight()
+    // }, 'confirmed');
     
-    console.log(`Token account created: ${tokenAccountAddress.toString()}`);
+    // console.log(`Token account created: ${tokenAccountAddress.toString()}`);
     
-    // Mint initial tokens to the user (1000 by default)
-    const mintAmount = 1000 * (10 ** decimals);
+    // // Mint initial tokens to the user (1000 by default)
+    // const mintAmount = 1000 * (10 ** decimals);
     
-    // Create mint transaction
-    const mintTx = new Transaction();
-    mintTx.add(
-      createMintToInstruction(
-        mintKeypair.publicKey,
-        tokenAccountAddress,
-        wallet.publicKey,
-        BigInt(mintAmount),
-        [],
-        TOKEN_PROGRAM_ID
-      )
-    );
+    // // Create mint transaction
+    // const mintTx = new Transaction();
+    // mintTx.add(
+    //   createMintToInstruction(
+    //     mintKeypair.publicKey,
+    //     tokenAccountAddress,
+    //     wallet.publicKey,
+    //     BigInt(mintAmount),
+    //     [],
+    //     TOKEN_PROGRAM_ID
+    //   )
+    // );
     
-    // Set transaction properties
-    const { blockhash: mintBlockhash } = await connection.getLatestBlockhash();
-    mintTx.recentBlockhash = mintBlockhash;
-    mintTx.feePayer = wallet.publicKey;
+    // // Set transaction properties
+    // const { blockhash: mintBlockhash } = await connection.getLatestBlockhash();
+    // mintTx.recentBlockhash = mintBlockhash;
+    // mintTx.feePayer = wallet.publicKey;
     
-    // Sign and send mint transaction
-    const signedMintTx = await wallet.signTransaction(mintTx);
-    const mintSignature = await connection.sendRawTransaction(signedMintTx.serialize());
-    await connection.confirmTransaction({
-      signature: mintSignature,
-      blockhash: mintBlockhash,
-      lastValidBlockHeight: await connection.getBlockHeight()
-    }, 'confirmed');
+    // // Sign and send mint transaction
+    // const signedMintTx = await wallet.signTransaction(mintTx);
+    // const mintSignature = await connection.sendRawTransaction(signedMintTx.serialize());
+    // await connection.confirmTransaction({
+    //   signature: mintSignature,
+    //   blockhash: mintBlockhash,
+    //   lastValidBlockHeight: await connection.getBlockHeight()
+    // }, 'confirmed');
     
-    console.log(`Minted ${mintAmount / (10 ** decimals)} tokens with signature: ${mintSignature}`);
+    // console.log(`Minted ${mintAmount / (10 ** decimals)} tokens with signature: ${mintSignature}`);
     
-    // Create and cache token info
+    // // Create and cache token info
+    // const tokenInfo = {
+    //   mint: mintKeypair.publicKey,
+    //   decimals,
+    //   symbol: upperSymbol,
+    //   name: `${upperSymbol} Test Token`,
+    // };
+
     const tokenInfo = {
       mint: mintKeypair.publicKey,
       decimals,
@@ -400,30 +438,60 @@ export async function mintMoreTokens(
     }
     
     const upperSymbol = tokenSymbol.toUpperCase();
-    
+    console.log(`Preparing to mint ${amount} ${upperSymbol} tokens`);
     // Get token info (this will create the token if needed)
     const tokenInfo = await getOrCreateToken(connection, wallet, upperSymbol, network);
     
     // Get user's token account (or create if it doesn't exist)
-    const tokenAccount = await getOrCreateAssociatedTokenAccount(
-      connection,
-      { 
-        publicKey: wallet.publicKey, 
-        signTransaction: wallet.signTransaction 
-      }as any, // Simplified signer
+    // const tokenAccount = await getOrCreateAssociatedTokenAccount(
+    //   connection,
+    //   { 
+    //     publicKey: wallet.publicKey, 
+    //     signTransaction: wallet.signTransaction 
+    //   }as any, // Simplified signer
+    //   tokenInfo.mint,
+    //   wallet.publicKey
+    // );
+
+    const tokenAccountAddress = await getAssociatedTokenAddress(
       tokenInfo.mint,
       wallet.publicKey
-    );
+    )
+
     
+    const transaction = new Transaction();
+
+    let accountExists = false;
+
+    try{
+      const accountInfo = await connection.getAccountInfo(tokenAccountAddress);
+      accountExists = !!accountInfo;
+      console.log(`Token account ${accountExists ? 'exists' : 'does not exist'}`);
+    }catch (error) {
+      accountExists = false;
+      console.log(`Error checking token account existence: ${error}, assuming it does not exist`);
+    }
+
+    if(!accountExists) {
+      console.log(`Creating token account for ${upperSymbol}...`);
+
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          tokenAccountAddress,
+          wallet.publicKey,
+          tokenInfo.mint
+        )
+      )
+    }
     // Create a mint transaction
     const mintAmount = amount * Math.pow(10, tokenInfo.decimals);
-    const transaction = new Transaction();
     
     // Add mint instruction - the wallet is the mint authority because we set it that way in createNewToken
     transaction.add(
       createMintToInstruction(
         tokenInfo.mint,
-        tokenAccount.address,
+        tokenAccountAddress,
         wallet.publicKey, // Mint authority is the wallet
         BigInt(Math.floor(mintAmount)),
         [],
@@ -435,11 +503,14 @@ export async function mintMoreTokens(
     const { blockhash } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = wallet.publicKey;
+
+    console.log(`Signing transaction with ${transaction.instructions.length} instructions...`);
     
     // Sign transaction with wallet
     const signedTx = await wallet.signTransaction(transaction);
     
     // Send and confirm transaction
+    console.log(`Sending transaction to mint ${amount} ${upperSymbol} tokens...`);
     const signature = await connection.sendRawTransaction(signedTx.serialize());
     await connection.confirmTransaction(signature);
     
