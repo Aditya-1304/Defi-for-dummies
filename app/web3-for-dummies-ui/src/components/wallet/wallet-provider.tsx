@@ -4,8 +4,9 @@
 import { FC, ReactNode, useEffect, useMemo, useState } from 'react';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
+import { preloadTokensFromLocalStorage } from '@/services/tokens-service';
+import { useNetwork } from '../(ui)/network-context';
 
 // Import wallet adapter styles
 import '@solana/wallet-adapter-react-ui/styles.css';
@@ -16,7 +17,8 @@ interface Props {
 
 export const WalletContextProvider: FC<Props> = ({ children }) => {
 
-  const [network, setNetwork] = useState<'localnet' | 'devnet' | 'mainnet'>('localnet');
+  // const [network, setNetwork] = useState<'localnet' | 'devnet' | 'mainnet'>('localnet');
+  const { network } = useNetwork();
   
   const walletNetwork = useMemo(() => {
     switch(network) {
@@ -36,24 +38,32 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     
     console.log("WalletProvider: URL network parameter =", networkParam);
     console.log("Current network in state =", network);
+
+    setTimeout(() => {
+      console.log("Starting token preload...");
+      preloadTokensFromLocalStorage();
+      console.log("Token preload complete");
+    }, 0);
+
+    console.log("WalletProvider: URL network parameter =", networkParam);
     
     // Get current endpoint from connection (if it exists)
     const currentEndpoint = window.localStorage.getItem('network');
     console.log("Current network in localStorage =", currentEndpoint);
     
-    if (networkParam === 'devnet') {
-      console.log("Setting network to devnet");
-      setNetwork('devnet');
-      window.localStorage.setItem('network', 'devnet');
-    } else if (networkParam === 'mainnet') {
-      console.log("Setting network to mainnet");
-      setNetwork('mainnet');
-      window.localStorage.setItem('network', 'mainnet');
-    } else {
-      console.log("Setting network to localnet");
-      setNetwork('localnet');
-      window.localStorage.setItem('network', 'localnet');
-    }
+    // if (networkParam === 'devnet') {
+    //   console.log("Setting network to devnet");
+    //   setNetwork('devnet');
+    //   window.localStorage.setItem('network', 'devnet');
+    // } else if (networkParam === 'mainnet') {
+    //   console.log("Setting network to mainnet");
+    //   setNetwork('mainnet');
+    //   window.localStorage.setItem('network', 'mainnet');
+    // } else {
+    //   console.log("Setting network to localnet");
+    //   setNetwork('localnet');
+    //   window.localStorage.setItem('network', 'localnet');
+    // }
   }, []);
 
   // Define endpoints for different networks
@@ -72,11 +82,8 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
 
   // Initialize wallet adapters
   const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter({ network: walletNetwork }),
-    ],
-    [walletNetwork]
+    () => [],
+    []
   );
 
   return (
@@ -87,46 +94,3 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     </ConnectionProvider>
   );
 };
-
-// src/providers.tsx
-// "use client";
-
-// import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-// import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
-// import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-// import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
-// import { useMemo, useState } from 'react';
-// import { useSearchParams } from 'next/navigation';
-
-// const NETWORK_URLS = {
-//   localnet: "http://localhost:8899",
-//   devnet: "https://api.devnet.solana.com",
-//   mainnet: "https://api.mainnet-beta.solana.com"
-// };
-
-// export function WalletContextProvider({ children }: { children: React.ReactNode }) {
-//   const searchParams = useSearchParams();
-//   const networkParam = searchParams.get('network');
-  
-//   // Set the correct endpoint based on URL parameter
-//   const endpoint = useMemo(() => {
-//     if (networkParam === 'devnet') {
-//       return NETWORK_URLS.devnet;
-//     } else if (networkParam === 'mainnet') {
-//       return NETWORK_URLS.mainnet;
-//     } else {
-//       return NETWORK_URLS.localnet;
-//     }
-//   }, [networkParam]);
-
-//   // Set up supported wallets
-//   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
-
-//   return (
-//     <ConnectionProvider endpoint={endpoint}>
-//       <WalletProvider wallets={wallets} autoConnect>
-//         <WalletModalProvider>{children}</WalletModalProvider>
-//       </WalletProvider>
-//     </ConnectionProvider>
-//   );
-// }
