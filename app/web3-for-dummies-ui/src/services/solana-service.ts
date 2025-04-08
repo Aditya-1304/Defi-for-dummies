@@ -5,6 +5,7 @@ import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOK
 import { Web3ForDummies } from '../public/idl/types/web3_for_dummies';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
 import { getOrCreateToken, getTokenBalance, transferToken, mintMoreTokens, tokenCache } from './tokens-service';
+import * as spl from '@solana/spl-token';
 
 const IDL = idl;
 
@@ -13,7 +14,7 @@ const IDL = idl;
 // or default to SOL transfers when needed
 const LOCALNET_TOKENS: Record<string, PublicKey | null> = {
   // Update these with your locally deployed token mints
-  USDC: new PublicKey("Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr"), // Example local USDC-like token
+  //USDC: new PublicKey("Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr"), // Example local USDC-like token
   SOL: null // null means native SOL
 };
 
@@ -23,10 +24,27 @@ const PROGRAM_ID = new PublicKey("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv")
 // Localnet URL (default Solana validator URL when running locally)
 const LOCALNET_URL=  "http://localhost:8899";
 
+const connectionCache: Record<string, web3.Connection> = {};
+
 const NETWORK_URLS = {
   localnet: "http://localhost:8899",
   devnet: "https://api.devnet.solana.com",
   mainnet: "https://solana-mainnet.rpc.extrnode.com"
+}
+
+
+export function getNetworkConnection(network: "localnet" | "devnet" | "mainnet"): Connection {
+  if (!connectionCache[network]) {
+    connectionCache[network] = new Connection(NETWORK_URLS[network], "confirmed");
+    console.log(`Created new connection for ${network}`);
+  }
+  return connectionCache[network];
+}
+
+export function clearConnectionCache(): void {
+  Object.keys(connectionCache).forEach(key => {
+    delete connectionCache[key];
+  });
 }
 
 export async function executePayment(
@@ -55,24 +73,54 @@ export async function executePayment(
     const tokenUpperCase = token.toUpperCase();
     
     // Handle SOL transfers differently (they don't use token accounts)
-    if (tokenUpperCase === 'SOL') {
-      // SOL transfer code remains the same
-      console.log(`Creating SOL transfer on ${network}...`);
-      // ... existing SOL transfer code ...
-    } else if (tokenUpperCase !== 'SOL' && tokenCache[network][tokenUpperCase]) {
-      // Handle token transfers using the token service
-      console.log(`Transferring ${amount} ${tokenUpperCase} tokens to ${recipient}`);
+    if (tokenUpperCase === 'SOL' && !LOCALNET_TOKENS.SOL) {
       
+      console.log(`Creating SOL transfer on ${network} with connection endpoint: ${networkConnection.rpcEndpoint}`);
+  
       try {
-        const signature = await transferToken(
-          networkConnection,
-          wallet,
-          recipient,
-          amount,
-          tokenUpperCase,
-          network,
+        // Create a simple transfer instruction
+        const transferInstruction = web3.SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: new PublicKey(recipient),
+          lamports: amount * web3.LAMPORTS_PER_SOL
+        });
+    
+        // Get the latest blockhash using the SAME connection object
+        const { blockhash, lastValidBlockHeight } = await networkConnection.getLatestBlockhash();
+        console.log(`Got blockhash: ${blockhash} from network: ${network}`);
+        
+        // Create transaction and add our transfer instruction
+        const transaction = new Transaction();
+        transaction.add(transferInstruction);
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = wallet.publicKey;
+        
+        // Have the wallet sign the transaction
+        const signedTransaction = await wallet.signTransaction(transaction);
+        console.log("Transaction signed successfully");
+        
+        // Now send the signed transaction with our connection
+        const signature = await networkConnection.sendRawTransaction(signedTransaction.serialize());
+        console.log("Raw transaction sent with signature:", signature);
+        
+        // Wait for confirmation
+        console.log("Waiting for confirmation...");
+        const confirmation = await networkConnection.confirmTransaction(
+          {
+            signature,
+            blockhash,
+            lastValidBlockHeight: lastValidBlockHeight ?? 0
+          },
+          'confirmed'
         );
-
+        
+        if (confirmation.value.err) {
+          throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+        }
+        
+        console.log("Transaction confirmed successfully!");
+        
+        // Create explorer URL
         let explorerUrl;
         if (network === "localnet") {
           explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
@@ -81,112 +129,317 @@ export async function executePayment(
         } else if (network === "mainnet") {
           explorerUrl = `https://explorer.solana.com/tx/${signature}`;
         }
-
+        
         return {
           success: true,
           signature,
           explorerUrl,
           network,
-          message: `Successfully sent ${amount} ${tokenUpperCase} to ${recipient.substring(0, 8)}...on ${network}`
-        }
-      } catch (error : any) {
-        console.error("Token transfer error:", error);
+          message: `Successfully sent ${amount} SOL to ${recipient.substring(0, 8)}...on ${network}`
+        };
+    } catch (error) {
+      console.error("Transaction error:", error);
+
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const logs = (error as any)?.logs || [];
+      
+      return {
+        success: false,
+        error: errorMessage,
+        message: `Transaction failed on ${network}. ${errorMessage}${logs}`
+      }
+    }
+    }
+    
+    // Token transfers (for USDC etc.)
+    // Get token mint address based on the token type
+      // With this updated version that checks the token cache:
+    const tokenMint =(tokenCache[network] && tokenCache[network][tokenUpperCase]?.mint) || LOCALNET_TOKENS[tokenUpperCase] || 
+    
+    (tokenUpperCase === 'SOL' ? null : new PublicKey(token));
+
+    if (!tokenMint) {
+      throw new Error(`Token ${token} not supported on localnet`);
+    }
+    
+    // Create program instance using localnet connection
+    const provider = new AnchorProvider(
+      networkConnection,
+      wallet,
+      { commitment: 'confirmed' }
+    );
+    
+    const program = new Program<Web3ForDummies>(IDL, provider);
+    
+    // Get token accounts
+    const senderTokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      wallet.publicKey
+    );
+    
+    const recipientPubkey = new PublicKey(recipient);
+    const recipientTokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      recipientPubkey
+    );
+    
+    // Check if recipient token account exists, if not create it
+    let transaction = new Transaction();
+    try {
+      await networkConnection.getAccountInfo(recipientTokenAccount);
+    } catch (error) {
+      // Add instruction to create recipient token account if it doesn't exist
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          recipientTokenAccount,
+          recipientPubkey,
+          tokenMint
+        )
+      );
+    }
+    
+    // Convert amount to blockchain format with decimals (USDC has 6 decimals)
+    const decimals = tokenUpperCase === 'USDC' ? 6 : 9;
+    const amountBN = new BN(amount * Math.pow(10, decimals));
+    const amountToTransfer = amount * Math.pow(10, decimals);
+
+    
+    // Build the transaction for token transfer
+    // const transferTx = await program.methods
+    //   .processTransaction(amountBN)
+    //   .accounts({
+    //     authority: wallet.publicKey,
+    //     senderTokenAccount: senderTokenAccount,
+    //     senderTokenAccountMint: tokenMint,
+    //     receiverTokenAccount: recipientTokenAccount,
+    //     tokenProgram: TOKEN_PROGRAM_ID,
+    //   })
+    //   .transaction();
+    
+    // // Add the transfer instructions to our transaction
+    // transaction.add(transferTx);
+    
+    // // Sign and send transaction
+    // console.log("Sending transaction to localnet...");
+    // const signature = await wallet.sendTransaction(transaction, networkConnection);
+    
+    // console.log("Confirming transaction...");
+    // await networkConnection.confirmTransaction(signature, 'confirmed');
+
+    const transferInstruction = spl.createTransferInstruction(
+      senderTokenAccount,       // source
+      recipientTokenAccount,    // destination
+      wallet.publicKey,         // owner
+      BigInt(amountToTransfer), // amount as BigInt
+      [],                       // multi-signature signers (empty for single signer)
+      spl.TOKEN_PROGRAM_ID      // token program ID
+    );
+    
+    // Add the transfer instruction to our transaction
+    transaction.add(transferInstruction);
+    
+    // // Get a fresh blockhash
+    // const { blockhash, lastValidBlockHeight } = await networkConnection.getLatestBlockhash();
+    // transaction.recentBlockhash = blockhash;
+    // transaction.feePayer = wallet.publicKey;
+    
+    // // Sign and send transaction
+    // console.log(`Sending ${token} transaction to ${network}...`);
+    // const signature = await wallet.sendTransaction(transaction, networkConnection);
+    let blockhash, lastValidBlockHeight;
+    let retries = network ==="devnet" ? 5 : 3;
+    while (retries > 0) {
+      try {
+        console.log(`Getting latest blockhash for ${network}, attempt ${6-retries}...`);
+        // Use finalized for devnet for better stability
+        const commitment = network === "devnet" ? 'finalized' : 'confirmed';
+        const blockhashData = await networkConnection.getLatestBlockhash(commitment);
+        blockhash = blockhashData.blockhash;
+        lastValidBlockHeight = blockhashData.lastValidBlockHeight;
+        
+        console.log(`Got blockhash: ${blockhash}, lastValidBlockHeight: ${lastValidBlockHeight}`);
+        if (blockhash) break;
+      } catch (err) {
+        console.warn("Error fetching blockhash, retrying...", err);
+      }
+      retries--;
+      // Short delay before retry
+      await new Promise(resolve => setTimeout(resolve, network === "devnet"? 1000: 500));
+    }
+
+    if (!blockhash) {
+      throw new Error("Failed to get a valid blockhash after multiple attempts. Network may be unstable.");
+    }
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = wallet.publicKey;
+
+    try {
+      // First check if the token account exists
+      const tokenAccountInfo = await networkConnection.getAccountInfo(senderTokenAccount);
+      
+      if (!tokenAccountInfo) {
+        console.log(`Token account doesn't exist yet for ${token}`);
         return {
           success: false,
-          error: error.message,
-          message: `Failed to send ${tokenUpperCase}: ${error.message}`
-        }
-      }
-    } else {
-      // Fall back to using the program-based token transfer for LOCALNET_TOKENS
-      console.log(`Using program-based transfer for ${tokenUpperCase}`);
-      
-      // Token transfers (for USDC etc.)
-      // Get token mint address based on the token type
-      const tokenMint = LOCALNET_TOKENS[tokenUpperCase] || 
-                        new PublicKey(token);
-      
-      // Create program instance using localnet connection
-      const provider = new AnchorProvider(
-        networkConnection,
-        wallet,
-        { commitment: 'confirmed' }
-      );
-      
-      const program = new Program<Web3ForDummies>(IDL, provider);
-      
-      // Get token accounts
-      const senderTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        wallet.publicKey
-      );
-      
-      const recipientPubkey = new PublicKey(recipient);
-      const recipientTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        recipientPubkey
-      );
-      
-      // Check if recipient token account exists, if not create it
-      let transaction = new Transaction();
-      try {
-        await networkConnection.getAccountInfo(recipientTokenAccount);
-      } catch (error) {
-        // Add instruction to create recipient token account if it doesn't exist
-        transaction.add(
-          createAssociatedTokenAccountInstruction(
-            wallet.publicKey,
-            recipientTokenAccount,
-            recipientPubkey,
-            tokenMint
-          )
-        );
+          error: "Token account not found",
+          message: `You don't have a ${token} token account yet. Try minting some tokens first.`
+        };
       }
       
-      // Convert amount to blockchain format with decimals
-      const decimals = tokenUpperCase === 'USDC' ? 6 : 9;
-      const amountBN = new BN(amount * Math.pow(10, decimals));
+      // Now safely get the balance
+      const senderAccountInfo = await networkConnection.getTokenAccountBalance(senderTokenAccount);
+      const senderBalance = senderAccountInfo.value.uiAmount || 0;
       
-      // Build the transaction for token transfer
-      const transferTx = await program.methods
-        .processTransaction(amountBN)
-        .accounts({
-          authority: wallet.publicKey,
-          senderTokenAccount: senderTokenAccount,
-          senderTokenAccountMint: tokenMint,
-          receiverTokenAccount: recipientTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .transaction();
+      if (senderBalance < amount) {
+        return {
+          success: false,
+          error: "Insufficient funds",
+          message: `You only have ${senderBalance} ${token}, but tried to send ${amount} ${token}`
+        };
+      }
       
-      // Add the transfer instructions to our transaction
-      transaction.add(transferTx);
-      
-      // Sign and send transaction
-      console.log(`Sending ${tokenUpperCase} transaction to ${network}...`);
-      const signature = await wallet.sendTransaction(transaction, networkConnection);
-      
-      console.log("Confirming transaction...");
-      await networkConnection.confirmTransaction(signature, 'confirmed');
-      
-      let explorerUrl;
-      
-        if (network === "localnet"){
-          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
-        }else if (network === "devnet") {
-          explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-        }else if (network === "mainnet") {
-          explorerUrl = `https://explorer.solana.com/tx/${signature}`;
-        }
-
+      console.log(`Confirmed sender has sufficient balance: ${senderBalance} ${token}`);
+    } catch (error : any) {
+      console.error("Error checking sender balance:", error);
       return {
-        success: true,
-        signature,
-        explorerUrl,
-        network,
-        message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}...on ${network}`
+        success: false,
+        error: "Failed to verify sender balance",
+        message: `Could not verify if you have enough ${token} tokens: ${error.message}`
       };
     }
+    // Sign and send transaction with timeout handling
+    console.log(`Sending ${token} transaction to ${network}...`);
+    // const signature = await wallet.sendTransaction(transaction, networkConnection);
+        
+    // // Wait for confirmation with proper error handling
+    // console.log(`Confirming transaction ${signature} on ${network}...`);
+    // const confirmationTimeout = network === "devnet" ? 60000 : 30000;
+
+    // const confirmationPromise = await networkConnection.confirmTransaction({
+    //   signature,
+    //   blockhash,
+    //   lastValidBlockHeight: lastValidBlockHeight ?? 0
+    // }, network === 'devnet' ? 'finalized': 'confirmed');
+
+    // const timeoutPromise = new Promise((_, reject) => {
+    //   setTimeout(()=> reject(new Error(`Transaction confirmation timed out after ${confirmationTimeout/1000} seconds`)), confirmationTimeout)
+    // })
+
+    // const confirmation = await Promise.race([confirmationPromise, timeoutPromise]) as any;
+    
+    // if (confirmation.value.err) {
+    //   throw new Error(`Transaction confirmed but failed: ${confirmation.value.err.toString()}`);
+    // }
+    if (network === "devnet") {
+      let txSuccess = false;
+      let txSignature = '';
+      let txAttempts = 0;
+      const maxTxAttempts = 3;
+      
+      while (!txSuccess && txAttempts < maxTxAttempts) {
+        txAttempts++;
+        try {
+          console.log(`Devnet transaction attempt ${txAttempts}/${maxTxAttempts}...`);
+          
+          // Recreate connection with preferred commitment for each attempt
+          const freshConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
+          
+          // Get a fresh blockhash directly before sending
+          const { blockhash: freshBlockhash, lastValidBlockHeight } = 
+            await freshConnection.getLatestBlockhash('confirmed');
+          
+          console.log(`Got fresh blockhash: ${freshBlockhash.slice(0, 10)}...`);
+          
+          // Update transaction with fresh blockhash
+          transaction.recentBlockhash = freshBlockhash;
+          transaction.feePayer = wallet.publicKey;
+          
+          // Sign the transaction first to avoid timeout issues
+          const signedTx = await wallet.signTransaction(transaction);
+          
+          // Send raw transaction for more reliability
+          console.log(`Sending raw transaction to devnet...`);
+          txSignature = await freshConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+          });
+          
+          console.log(`Transaction sent with signature: ${txSignature}`);
+          
+          // Confirm with slightly higher timeout
+          const confirmation = await freshConnection.confirmTransaction({
+            signature: txSignature,
+            blockhash: freshBlockhash,
+            lastValidBlockHeight
+          }, 'confirmed');
+          
+          if (confirmation.value.err) {
+            throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          }
+          
+          txSuccess = true;
+          console.log(`Transaction confirmed successfully!`);
+        } catch (error: any) {
+          console.warn(`Attempt ${txAttempts} failed:`, error);
+          
+          if (txAttempts >= maxTxAttempts) {
+            throw error;
+          }
+          
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, txAttempts - 1);
+          console.log(`Waiting ${delay}ms before next attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+      
+      // If we got here with a signature, the transaction was successful
+      if (txSuccess) {
+        console.log(`Transaction confirmed successfully after ${txAttempts} attempt(s)`);
+        
+        // Create explorer URL
+        const explorerUrl = `https://explorer.solana.com/tx/${txSignature}?cluster=devnet`;
+        
+        return {
+          success: true,
+          signature: txSignature,
+          explorerUrl,
+          network,
+          message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}... on devnet`
+        };
+      }
+    } else {
+      // Original code for localnet (which works fine)
+      const signature = await wallet.sendTransaction(transaction, networkConnection);
+      
+      // Wait for confirmation with proper error handling
+      console.log(`Confirming transaction ${signature} on ${network}...`);
+      // Rest of the existing confirmation logic...
+      let explorerUrl;
+    
+      if (network === "localnet"){
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=http%3A%2F%2Flocalhost%3A8899`;
+      }else if (network === "devnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      }else if (network === "mainnet") {
+        explorerUrl = `https://explorer.solana.com/tx/${signature}`;
+      }
+
+    return {
+      success: true,
+      signature,
+      explorerUrl,
+      network,
+      message: `Successfully sent ${amount} ${token} to ${recipient.substring(0, 8)}...`
+    };
+    }
+    
+    
   } catch (error: any) {
     console.error("Payment execution error:", error);
     return {
@@ -349,6 +602,146 @@ export async function mintTestTokens(
     const networkUrl = NETWORK_URLS[network];
     const networkConnection = new Connection(networkUrl, "confirmed");
     
+    // Special handling for devnet
+    if (network === "devnet") {
+      try {
+        // Creating a custom token with user's wallet as mint authority
+        const tokenSymbol = token.toUpperCase();
+        
+        
+        // Check if we already have created this custom token before
+        if (tokenCache[network] && tokenCache[network][tokenSymbol]) {
+          console.log(`Using existing custom token: ${tokenSymbol}`);
+          
+          // Use the existing token mint from cache
+          const TokenMint = tokenCache[network][tokenSymbol].mint;
+          
+          // Mint more tokens from the existing mint
+          const signature = await mintMoreCustomTokens(
+            networkConnection,
+            wallet,
+            TokenMint,
+            amount,
+            tokenCache[network][tokenSymbol].decimals || 9
+          );
+          
+          return {
+            success: true,
+            token: tokenSymbol,
+            amount,
+            network,
+            signature,
+            message: `Successfully minted ${amount} ${tokenSymbol} tokens to your wallet on devnet`
+          };
+        }
+        
+        // We need to create a new custom token mint
+        console.log(`Creating new custom token: ${tokenSymbol} on devnet`);
+        
+        // Create new token mint with 9 decimals (or 6 for USDC-like tokens)
+        const decimals = tokenSymbol.includes('USDC') ? 6 : 9;
+        
+        // Create the mint
+        const mintKeypair = web3.Keypair.generate();
+        const mintPubkey = mintKeypair.publicKey;
+        
+        // Create minimum balance for rent exemption transaction
+        const lamports = await networkConnection.getMinimumBalanceForRentExemption(
+          spl.MintLayout.span
+        );
+        
+        // Create account transaction
+        const createAccountTx = web3.SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: mintPubkey,
+          lamports,
+          space: spl.MintLayout.span,
+          programId: spl.TOKEN_PROGRAM_ID
+        });
+        
+        // Initialize mint transaction
+        const initMintTx = spl.createInitializeMintInstruction(
+          mintPubkey,
+          decimals,
+          wallet.publicKey,
+          wallet.publicKey,
+          spl.TOKEN_PROGRAM_ID
+        );
+        
+        // Create associated token account for the user
+        const associatedTokenAccount = await spl.getAssociatedTokenAddress(
+          mintPubkey,
+          wallet.publicKey
+        );
+        
+        // Create token account transaction
+        const createAssociatedTokenAccountTx = spl.createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          associatedTokenAccount,
+          wallet.publicKey,
+          mintPubkey
+        );
+        
+        // Mint tokens transaction
+        const mintToTx = spl.createMintToInstruction(
+          mintPubkey,
+          associatedTokenAccount,
+          wallet.publicKey,
+          amount * Math.pow(10, decimals),
+          [],
+          spl.TOKEN_PROGRAM_ID
+        );
+        
+        // Combine all transactions
+        const transaction = new web3.Transaction().add(
+          createAccountTx,
+          initMintTx,
+          createAssociatedTokenAccountTx,
+          mintToTx
+        );
+        
+        // Set recent blockhash
+        const { blockhash } = await networkConnection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = wallet.publicKey;
+        
+        // Sign with mint keypair and wallet
+        transaction.partialSign(mintKeypair);
+        const signedTransaction = await wallet.signTransaction(transaction);
+        
+        // Send and confirm transaction
+        const signature = await networkConnection.sendRawTransaction(signedTransaction.serialize());
+        await networkConnection.confirmTransaction(signature);
+        
+        // Store token in cache
+        if (!tokenCache[network]) tokenCache[network] = {};
+        tokenCache[network][tokenSymbol] = {
+          mint: mintPubkey,
+          decimals,
+          tokenAccount: associatedTokenAccount
+        }as any;
+        
+        console.log(`Created and minted new custom token ${tokenSymbol} on devnet`);
+        
+        return {
+          success: true,
+          token: tokenSymbol,
+          amount,
+          network,
+          signature,
+          message: `Successfully created and minted ${amount} ${tokenSymbol} tokens to your wallet on devnet`
+        };
+      } catch (devnetError: any) {
+        console.error("Devnet token minting error:", devnetError);
+        return {
+          success: false,
+          error: devnetError.message,
+          message: `Failed to create/mint tokens on devnet: ${devnetError.message}`
+        };
+      }
+    }
+    
+    // Standard handling for localnet
     await mintMoreTokens(
       networkConnection,
       wallet,
@@ -373,3 +766,275 @@ export async function mintTestTokens(
     };
   }
 };
+async function mintMoreCustomTokens(
+  connection: Connection,
+  wallet: any,
+  mintPubkey: PublicKey,
+  amount: number,
+  decimals: number = 9
+) {
+  try {
+    // Get the token account address
+    const tokenAccount = await spl.getAssociatedTokenAddress(
+      mintPubkey,
+      wallet.publicKey
+    );
+    
+    // Create mint instruction
+    const mintInstruction = spl.createMintToInstruction(
+      mintPubkey,
+      tokenAccount,
+      wallet.publicKey,
+      amount * Math.pow(10, decimals),
+      [],
+      spl.TOKEN_PROGRAM_ID
+    );
+    
+    // Create transaction
+    const transaction = new web3.Transaction().add(mintInstruction);
+    
+    // Set recent blockhash
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = wallet.publicKey;
+    
+    // Sign and send transaction
+    const signature = await wallet.sendTransaction(transaction, connection);
+    await connection.confirmTransaction(signature);
+    
+    return signature;
+  } catch (error) {
+    console.error("Error minting more custom tokens:", error);
+    throw error;
+  }
+}
+
+export async function getAllWalletBalances(
+  connection: web3.Connection,
+  wallet: any,
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  options: { initialOnly: false}
+) {
+  try {
+    if (!wallet.publicKey) throw new Error("Wallet not connected");
+    
+    console.log(`🌐 Getting all balances on ${network} network`);
+    
+    if (network === "mainnet") {
+      return {
+        success: false,
+        error: "Mainnet balance checks unavailable",
+        message: "Mainnet balance checks are unavailable in demo mode. Please use devnet or localnet."
+      };
+    }
+    
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed");
+    
+    
+    // Start with SOL balance
+    const solBalance = await networkConnection.getBalance(wallet.publicKey);
+    const solBalanceInSOL = solBalance / web3.LAMPORTS_PER_SOL;
+    
+    const initialBalances = [
+      {
+        token: 'SOL',
+        balance: solBalanceInSOL,
+        decimals: 9
+      }
+    ];
+    
+    if (options.initialOnly) {
+      return {
+        success: true,
+        balances: initialBalances,
+        network,
+        isPartial: true,
+        message: `Your ${network} wallet has ${solBalanceInSOL.toFixed(7)} SOL`
+      };
+    }
+    
+    const tokenAddresses = [];
+    const balances = [...initialBalances];
+
+    // Get balances for all cached tokens in this network
+    const tokenSymbols = Object.keys(tokenCache[network] || {});
+    
+    for (const symbol of tokenSymbols) {
+      const tokenInfo = tokenCache[network][symbol];
+      try {
+        const tokenAddress = await getAssociatedTokenAddress(
+          tokenInfo.mint,
+          wallet.publicKey
+        );
+        tokenAddresses.push(tokenAddress);
+      } catch (error) {
+        console.warn(`Error getting address for ${symbol}:`, error);
+      }
+    }
+
+    const tokenInfos = await networkConnection.getMultipleAccountsInfo(tokenAddresses);
+    
+    for (let i = 0; i < tokenAddresses.length; i++) {
+      const tokenAddress = tokenAddresses[i];
+      const accountInfo = tokenInfos[i];
+      const symbol = tokenSymbols[i];
+      
+      if (accountInfo) {
+        try {
+          // Process the account info directly instead of making another request
+          const tokenBalance = await networkConnection.getTokenAccountBalance(tokenAddress);
+          const balance = tokenBalance.value.uiAmount || 0;
+          const decimals = tokenBalance.value.decimals;
+          
+          balances.push({
+            token: symbol,
+            balance,
+            decimals
+          });
+        } catch (error) {
+          console.warn(`Failed to parse token ${symbol} from batch request:`, error);
+        }
+      } else {
+        // Account doesn't exist, push zero balance
+        balances.push({
+          token: symbol,
+          balance: 0,
+          decimals: tokenCache[network][symbol].decimals || 6
+        });
+      }
+    }
+
+    // Format the message
+    const tokens = balances.map(b => 
+      `${b.balance.toFixed(b.token === 'SOL' ? 7 : 2)} ${b.token}`
+    );
+    
+    let message;
+    if (balances.length > 1) {
+      message = `Your ${network} wallet balances:\n• ${tokens.join('\n• ')}`;
+    } else if (balances.length === 1) {
+      message = `Your ${network} wallet has ${tokens[0]}`;
+    } else {
+      message = `Your ${network} wallet has no tokens`;
+    }
+    
+    return {
+      success: true,
+      balances,
+      network,
+      message
+    };
+  } catch (error: any) {
+    console.error("Balance check error:", error);
+    return {
+      success: false,
+      error: error.message,
+      network,
+      message: `Failed to get balances: ${error.message}`
+    };
+  }
+}
+
+export async function getTokenBalancesOnly(
+  connection: web3.Connection,
+  wallet: any,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+) {
+  try {
+    if (!wallet.publicKey) throw new Error("Wallet not connected");
+    
+    console.log(`🔍 Getting token balances on ${network} network`);
+    
+    if (network === "mainnet") {
+      return {
+        success: false,
+        error: "Mainnet balance checks unavailable",
+        balances: [],
+        message: "Mainnet balance checks are unavailable in demo mode."
+      };
+    }
+    
+    const networkUrl = NETWORK_URLS[network];
+    const networkConnection = new Connection(networkUrl, "confirmed");
+    
+    const tokenAddresses = [];
+    const balances = [];
+    
+    // Get balances for all cached tokens in this network
+    const tokenSymbols = Object.keys(tokenCache[network] || {});
+    
+    // Skip if no tokens in cache
+    if (tokenSymbols.length === 0) {
+      return {
+        success: true,
+        balances: [],
+        network,
+        message: "No tokens found in cache"
+      };
+    }
+    
+    // Get token account addresses
+    for (const symbol of tokenSymbols) {
+      const tokenInfo = tokenCache[network][symbol];
+      try {
+        const tokenAddress = await getAssociatedTokenAddress(
+          tokenInfo.mint,
+          wallet.publicKey
+        );
+        tokenAddresses.push(tokenAddress);
+      } catch (error) {
+        console.warn(`Error getting address for ${symbol}:`, error);
+      }
+    }
+    
+    // Batch request for account info
+    const tokenInfos = await networkConnection.getMultipleAccountsInfo(tokenAddresses);
+    
+    // Process results
+    for (let i = 0; i < tokenAddresses.length; i++) {
+      const tokenAddress = tokenAddresses[i];
+      const accountInfo = tokenInfos[i];
+      const symbol = tokenSymbols[i];
+      
+      if (accountInfo) {
+        try {
+          // Process the account info directly
+          const tokenBalance = await networkConnection.getTokenAccountBalance(tokenAddress);
+          const balance = tokenBalance.value.uiAmount || 0;
+          const decimals = tokenBalance.value.decimals;
+          
+          balances.push({
+            token: symbol,
+            balance,
+            decimals
+          });
+        } catch (error) {
+          console.warn(`Failed to parse token ${symbol} from batch request:`, error);
+        }
+      } else {
+        // Account doesn't exist, push zero balance
+        balances.push({
+          token: symbol,
+          balance: 0,
+          decimals: tokenCache[network][symbol].decimals || 6
+        });
+      }
+    }
+    
+    return {
+      success: true,
+      balances,
+      network,
+      message: `Loaded ${balances.length} token balances`
+    };
+  } catch (error: any) {
+    console.error("Token balance check error:", error);
+    return {
+      success: false,
+      error: error.message,
+      balances: [],
+      network,
+      message: `Failed to get token balances: ${error.message}`
+    };
+  }}

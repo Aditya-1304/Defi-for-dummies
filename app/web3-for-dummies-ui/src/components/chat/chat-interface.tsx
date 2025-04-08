@@ -1,7 +1,7 @@
 // src/components/chat/chat-interface.tsx
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -9,17 +9,113 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, getWalletBalance, mintTestTokens } from "@/services/solana-service"
-import { WalletButton } from "@/components/wallet/wallet-button"
-import { NetworkSwitcher } from "../(ui)/NetworkSwitcher"
-import { NetworkDisplay } from "../(ui)/NetworkDisplay"
+import { executePayment, getWalletBalance, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
+import * as React from "react"
+import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
+
+import dynamic from 'next/dynamic'
+
+// Lazy load heavy components
+const NetworkSwitcher = dynamic(
+  () => import('../(ui)/NetworkSwitcher').then(mod => ({ default: mod.NetworkSwitcher })),
+  { ssr: false, loading: () => <div className="w-[120px] h-8 bg-gray-800 animate-pulse rounded" /> }
+)
+
+const WalletButton = dynamic(
+  () => import('../wallet/wallet-button').then(mod => ({ default: mod.WalletButton })),
+  { ssr: false, loading: () => <div className="h-8 w-[120px] bg-gray-800 animate-pulse rounded" /> }
+)
+
 interface Message {
-  id: string // Change from number to string
+  id: string
   content: string
   sender: "user" | "ai"
-  timestamp: string // Change from Date to string
+  timestamp: string
 }
+
+// Separate MessageComponent to improve rendering performance
+const MessageComponent = React.memo(({ message, isClient, formatTime, MessageWithLinks }: { 
+  message: Message,
+  isClient: boolean,
+  formatTime: (dateString: string) => string,
+  MessageWithLinks: (text: string) => JSX.Element
+}) => {
+  return (
+    <motion.div
+      key={message.id}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className={`mb-4 flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+    >
+      <div
+        className={`flex max-w-[80%] items-start gap-3 ${message.sender === "user" ? "flex-row-reverse" : ""}`}
+      >
+        <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-gray-800 dark:bg-gray-800 light:bg-gray-200">
+          {message.sender === "ai" ? (
+            <span className="text-sm font-semibold">AI</span>
+          ) : (
+            <span className="text-sm font-semibold">U</span>
+          )}
+        </div>
+        <div
+          className={`rounded-lg px-4 py-2 ${
+            message.sender === "user"
+              ? "bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-600 dark:to-indigo-600 light:from-purple-500 light:to-indigo-500 text-white"
+              : "bg-gradient-to-r from-gray-800 to-gray-700 dark:from-gray-800 dark:to-gray-700 light:from-gray-200 light:to-gray-100 dark:text-gray-100 light:text-gray-800"
+          }`}
+        >
+          {MessageWithLinks(message.content)}
+          {isClient && <p className="mt-1 text-xs opacity-70">{formatTime(message.timestamp)}</p>}
+        </div>
+      </div>
+    </motion.div>
+  );
+});
+
+// Input form component to isolate state changes
+interface ChatInputFormProps {
+  onSendMessage: (message: string) => void;
+  isLoading: boolean;
+  walletConnected: boolean;
+}
+
+const ChatInputForm = React.memo(({ onSendMessage, isLoading, walletConnected }: ChatInputFormProps) => {
+  const [inputValue, setInputValue] = useState("");
+  
+  const handleSend = useCallback(() => {
+    if (!inputValue.trim()) return;
+    onSendMessage(inputValue);
+    setInputValue("");
+  }, [inputValue, onSendMessage]);
+  
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSend();
+      }}
+      className="flex gap-2"
+    >
+      <Input
+        placeholder={walletConnected ? "Type 'send 10 USDC to address...'" : "Connect wallet to send payments..."}
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
+        className="flex-1 bg-gray-800 dark:bg-gray-800 light:bg-white border-gray-700 dark:border-gray-700 light:border-gray-300 text-gray-100 dark:text-gray-100 light:text-gray-800 placeholder:text-gray-500"
+      />
+      <Button
+        type="submit"
+        size="icon"
+        disabled={isLoading}
+        className="bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-600 dark:to-indigo-600 light:from-purple-500 light:to-indigo-500 hover:from-purple-700 hover:to-indigo-700"
+      >
+        <Send className="h-4 w-4" />
+        <span className="sr-only">Send message</span>
+      </Button>
+    </form>
+  );
+});
 
 export function ChatInterface() {
   const { connection } = useConnection()
@@ -30,8 +126,9 @@ export function ChatInterface() {
 
   const [isLoading, setIsLoading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState("")
   const [isClient, setIsClient] = useState(false)
+
+  const memoizedMessages = useMemo(() => messages, [messages])
 
   // Set isClient to true when component mounts on client side
   useEffect(() => {
@@ -48,33 +145,9 @@ export function ChatInterface() {
     }
   }, [messages])
 
-  // useEffect(() => {
-  //   // Only update URL if it doesn't already match the current network
-  //   const params = new URLSearchParams(window.location.search);
-  //   const currentNetworkParam = params.get('network');
-
-  //   // Only redirect if the URL param doesn't match the selected network
-  //   if (currentNetworkParam !== network) {
-  //     // Use history.replaceState instead of redirecting to avoid page reload
-  //     const newUrl = window.location.origin + "/chat?network=" + network;
-  //     window.history.replaceState({}, '', newUrl);
-  //   }
-  // }, [network]);
-
-  // // Add another useEffect to read from URL params on component mount
-  // useEffect(() => {
-  //   const params = new URLSearchParams(window.location.search);
-  //   const networkParam = params.get('network');
-  //   if (networkParam === 'devnet' || networkParam === 'localnet' || networkParam === 'mainnet') {
-  //     setNetwork(networkParam as "localnet" | "devnet" | "mainnet");
-  //   }
-  // }, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const networkParam = params.get("network")
-    // if (networkParam === "devnet" || networkParam === "localnet" || networkParam === "mainnet") {
-    //   setNetwork(networkParam as "localnet" | "devnet" | "mainnet")
-    // }
     const currentNetwork = networkParam === "devnet" || networkParam === "mainnet" ? networkParam : "localnet"
 
     setNetwork(currentNetwork as "localnet" | "devnet" | "mainnet")
@@ -97,6 +170,13 @@ export function ChatInterface() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && messages.length > 0) {
+      localStorage.setItem(`chat_messages_${network}`, JSON.stringify(messages))
+    }
+  }, [messages, network])
+
   const setDefaultWelcomeMessage = (currentNetwork: string) => {
     setMessages([
       {
@@ -107,11 +187,6 @@ export function ChatInterface() {
       },
     ])
   }
-  useEffect(() => {
-    if (typeof window !== 'undefined' && messages.length > 0) {
-      localStorage.setItem(`chat_messages_${network}`, JSON.stringify(messages))
-    }
-  }, [messages, network])
 
   const handleNewChat = () => {
     // Clear messages in state
@@ -130,22 +205,37 @@ export function ChatInterface() {
     }
   }
 
-  const handleSend = async () => {
-    if (!input.trim()) return
+  const addAIMessage = useCallback((content: string) => {
+    // The regex here had the same issue with $$ instead of \( and \)
+    const formattedContent = content.replace(
+      /View in \[Solana Explorer\]\((https:\/\/explorer\.solana\.com\/[^)]+)\)/g,
+      "View in [Solana Explorer]($1)"
+    );
+  
+    const aiMessage: Message = {
+      id: `ai-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      content: formattedContent, 
+      sender: "ai",
+      timestamp: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, aiMessage]);
+  }, []);
 
+  // Handle input message submission
+  const handleInputSend = useCallback(async (userInput: string) => {
+    if (!userInput.trim()) return;
+    
     // Add user message
     const userMessage: Message = {
-      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, // Create unique ID with timestamp
-      content: input,
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      content: userInput,
       sender: "user",
-      timestamp: new Date().toISOString(), // Store as string
-    }
-    setMessages((prev) => [...prev, userMessage])
-    setIsLoading(true)
-
-    const userInput = input
-    setInput("")
-
+      timestamp: new Date().toISOString(),
+    };
+    
+    setMessages((prev) => [...prev, userMessage]);
+    setIsLoading(true);
+    
     try {
       // Process with NLP
       const parsedInstruction = await parsePaymentInstruction(userInput)
@@ -185,7 +275,8 @@ export function ChatInterface() {
           setIsLoading(false)
           return
         }
-        const token = parsedInstruction.token || "SOL"
+        
+        // Get network from URL or user input
         const params = new URLSearchParams(window.location.search)
         const urlNetwork = params.get("network")
         const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet"
@@ -206,55 +297,82 @@ export function ChatInterface() {
         } else {
           console.log(`Using current URL network: ${network}`)
         }
-
-        console.log(`Checking balance on network: ${network}`)
-        addAIMessage(`Checking your ${token} balance on ${network}...`)
-
-        const result = await getWalletBalance(connection, wallet, token, network as "localnet" | "devnet" | "mainnet")
-
-        if (result.success) {
-          addAIMessage(`💰 ${result.message}`)
+        
+        // Check if this is a complete balance check or specific token check
+        if (parsedInstruction.isCompleteBalanceCheck) {
+          console.log(`Checking all token balances on ${network}`)
+          addAIMessage(`Checking all your token balances on ${network}...`)
+          
+          const result = await getAllWalletBalances(
+            connection, 
+            wallet, 
+            network as "localnet" | "devnet" | "mainnet",
+            { initialOnly: false }
+          )
+          
+          if (result.success) {
+            addAIMessage(`💰 ${result.message}`)
+          } else {
+            addAIMessage(`❌ ${result?.message || 'Failed to get balances'}`)
+          }
         } else {
-          addAIMessage(`❌ ${result?.message || 'Transaction failed'}`)
+          // This is a specific token balance check
+          const token = parsedInstruction.token || "SOL"
+          console.log(`Checking ${token} balance on network: ${network}`)
+          addAIMessage(`Checking your ${token} balance on ${network}...`)
+          
+          const result = await getWalletBalance(
+            connection, 
+            wallet, 
+            token, 
+            network as "localnet" | "devnet" | "mainnet"
+          )
+          
+          if (result.success) {
+            addAIMessage(`💰 ${result.message}`)
+          } else {
+            addAIMessage(`❌ ${result?.message || 'Failed to get balance'}`)
+          }
         }
+        
         setIsLoading(false)
         return
       }
 
       // In your handleSend function in chat-interface.tsx, add handling for mint requests
-if (parsedInstruction.isMintRequest) {
-  if (!wallet.connected) {
-    addAIMessage("Please connect your wallet to mint tokens.");
-    setIsLoading(false);
-    return;
-  }
-  
-  const token = parsedInstruction.token || "USDC";
-  const amount = parsedInstruction.amount || 100;
-  
-  const params = new URLSearchParams(window.location.search);
-  const urlNetwork = params.get("network");
-  const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
-  
-  addAIMessage(`Minting ${amount} ${token} tokens on ${effectiveNetwork}...`);
-  
-  const result = await mintTestTokens(
-    connection,
-    wallet,
-    token,
-    amount,
-    effectiveNetwork as "localnet" | "devnet" | "mainnet"
-  );
-  
-  if (result.success) {
-    addAIMessage(`✅ ${result.message}`);
-  } else {
-    addAIMessage(`❌ ${result.message}`);
-  }
-  
-  setIsLoading(false);
-  return;
-}
+      if (parsedInstruction.isMintRequest) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to mint tokens.");
+          setIsLoading(false);
+          return;
+        }
+        
+        const token = parsedInstruction.token || "USDC";
+        const amount = parsedInstruction.amount || 100;
+        
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        addAIMessage(`Minting ${amount} ${token} tokens on ${effectiveNetwork}...`);
+        
+        const result = await mintTestTokens(
+          connection,
+          wallet,
+          token,
+          amount,
+          effectiveNetwork as "localnet" | "devnet" | "mainnet"
+        );
+        
+        if (result.success) {
+          addAIMessage(`✅ ${result.message}`);
+        } else {
+          addAIMessage(`❌ ${result.message}`);
+        }
+        
+        setIsLoading(false);
+        return;
+      }
 
       // Lower the confidence threshold for Gemini
       if (parsedInstruction.isPayment && parsedInstruction.confidence > 0.5) {
@@ -274,32 +392,6 @@ if (parsedInstruction.isMintRequest) {
           return
         }
 
-        // let network = parsedInstruction.network || "localnet";
-        // const userInputLower = userInput.toLowerCase();
-
-        // if (userInputLower.includes("devnet") && network !== "devnet") {
-        //   console.log("Force setting network to devnet based on user input");
-        //   network = "devnet";
-        // } else if (userInputLower.includes("mainnet") && network !== "mainnet") {
-        //   console.log("Force setting network to mainnet based on user input");
-        //   network = "mainnet";
-        // } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
-        //   console.log("Force setting network to localnet based on user input");
-        //   network = "localnet";
-        // }
-
-        // // Request payment confirmation
-        // addAIMessage(`I'll help you send ${parsedInstruction.amount} ${parsedInstruction.token} to ${parsedInstruction.recipient}. Please confirm this transaction.`);
-
-        //   // Execute payment
-        //   const result = await executePayment(
-        //     connection,
-        //     wallet,
-        //     parsedInstruction.recipient!,
-        //     parsedInstruction.amount!,
-        //     parsedInstruction.token,
-        //     network
-        //   );
         const params = new URLSearchParams(window.location.search)
         const urlNetwork = params.get("network")
         const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet"
@@ -329,7 +421,8 @@ if (parsedInstruction.isMintRequest) {
               `View in [Solana Explorer](${result.explorerUrl})`,
           )
         } else {
-          addAIMessage(`❌ ${result?.message || 'Transaction failed'}`)
+          addAIMessage(`❌ Transaction failed: ${result?.message || 'Unknown error'}\n\nError details: ${result?.error || 'No details available'}`)
+           console.error("Transaction failure details:", result)
         }
       } else if (parsedInstruction.isPayment) {
         addAIMessage(
@@ -342,71 +435,55 @@ if (parsedInstruction.isMintRequest) {
         )
       }
     } catch (error) {
-      console.error("Error processing message:", error)
-      addAIMessage("Sorry, I encountered an error processing your request. Please try again.")
+      console.error("Payment execution error:", error)
+      addAIMessage(`❌ Transaction error: ${error instanceof Error ? error.message : String(error)}`)
+    
     }
 
     setIsLoading(false)
-  }
-
-  const addAIMessage = (content: string) => {
-    // The regex here had the same issue with $$ instead of \( and \)
-    const formattedContent = content.replace(
-      /View in \[Solana Explorer\]\((https:\/\/explorer\.solana\.com\/[^)]+)\)/g,
-      "View in [Solana Explorer]($1)"
-    );
-  
-    const aiMessage: Message = {
-      id: `ai-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-      content: formattedContent, 
-      sender: "ai",
-      timestamp: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, aiMessage]);
-  };
+  }, [wallet, connection, network, addAIMessage]);
 
   const MessageWithLinks = (text: string) => {
     // Handle direct URLs
     const urlRegex = /(https?:\/\/[^\s)]+)/g;
   
-  // Handle Markdown links [text](url)
-  // The issue is in this regex - the capture groups need fixing
-  const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    // Handle Markdown links [text](url)
+    const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
 
-  // Process Markdown links first
-  const markdownParts = [];
-  let lastIndex = 0;
-  let match;
+    // Process Markdown links first
+    const markdownParts = [];
+    let lastIndex = 0;
+    let match;
 
-  while ((match = markdownLinkRegex.exec(text)) !== null) {
-    const [fullMatch, linkText, url] = match;
-    const matchIndex = match.index;
+    while ((match = markdownLinkRegex.exec(text)) !== null) {
+      const [fullMatch, linkText, url] = match;
+      const matchIndex = match.index;
 
-    // Add text before the match
-    if (matchIndex > lastIndex) {
-      markdownParts.push(text.substring(lastIndex, matchIndex));
+      // Add text before the match
+      if (matchIndex > lastIndex) {
+        markdownParts.push(text.substring(lastIndex, matchIndex));
+      }
+
+      // Add the link component
+      markdownParts.push(
+        <a
+          key={`md-${url}-${matchIndex}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-purple-300 dark:text-purple-300 light:text-purple-600 hover:underline"
+        >
+          {linkText}
+        </a>
+      );
+
+      lastIndex = matchIndex + fullMatch.length;
     }
 
-    // Add the link component
-    markdownParts.push(
-      <a
-        key={`md-${url}-${matchIndex}`}
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-purple-300 dark:text-purple-300 light:text-purple-600 hover:underline"
-      >
-        {linkText}
-      </a>
-    );
-
-    lastIndex = matchIndex + fullMatch.length;
-  }
-
-  // Add remaining text
-  if (lastIndex < text.length) {
-    markdownParts.push(text.substring(lastIndex));
-  }
+    // Add remaining text
+    if (lastIndex < text.length) {
+      markdownParts.push(text.substring(lastIndex));
+    }
 
     // Process any direct URLs in text segments
     const processedParts = markdownParts.map((part, index) => {
@@ -469,9 +546,7 @@ if (parsedInstruction.isMintRequest) {
       <div className="p-4 border-b border-gray-800 dark:border-gray-800 light:border-gray-200 flex justify-between items-center">
         <h2 className="text-xl font-bold">Web3 Assistant</h2>
         
-        {/* <div className="flex items-center gap-3">
-          {isClient && <WalletButton />} */}
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button 
             onClick={handleNewChat}
             variant="ghost" 
@@ -482,44 +557,20 @@ if (parsedInstruction.isMintRequest) {
             <Trash2 className="h-4 w-4 mr-1" />
             <span className="text-sm">New Chat</span>
           </Button>
-            {/* <NetworkDisplay /> */}
-            <NetworkSwitcher />
-          </div>
-        {/* </div> */}
+          <NetworkSwitcher />
+        </div>
       </div>
       <div className="flex-1 overflow-hidden relative">
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <AnimatePresence initial={false}>
-            {messages.map((message) => (
-              <motion.div
-                key={message.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-                className={`mb-4 flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`flex max-w-[80%] items-start gap-3 ${message.sender === "user" ? "flex-row-reverse" : ""}`}
-                >
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-gray-800 dark:bg-gray-800 light:bg-gray-200">
-                    {message.sender === "ai" ? (
-                      <span className="text-sm font-semibold">AI</span>
-                    ) : (
-                      <span className="text-sm font-semibold">U</span>
-                    )}
-                  </div>
-                  <div
-                    className={`rounded-lg px-4 py-2 ${
-                      message.sender === "user"
-                        ? "bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-600 dark:to-indigo-600 light:from-purple-500 light:to-indigo-500 text-white"
-                        : "bg-gradient-to-r from-gray-800 to-gray-700 dark:from-gray-800 dark:to-gray-700 light:from-gray-200 light:to-gray-100 dark:text-gray-100 light:text-gray-800"
-                    }`}
-                  >
-                    {MessageWithLinks(message.content)}
-                    {isClient && <p className="mt-1 text-xs opacity-70">{formatTime(message.timestamp)}</p>}
-                  </div>
-                </div>
-              </motion.div>
+            {memoizedMessages.map((message) => (
+              <MessageComponent 
+                key={message.id} 
+                message={message} 
+                isClient={isClient} 
+                formatTime={formatTime}
+                MessageWithLinks={MessageWithLinks}
+              />
             ))}
             {isLoading && (
               <div className="flex max-w-[80%] items-start gap-3">
@@ -535,31 +586,12 @@ if (parsedInstruction.isMintRequest) {
         </ScrollArea>
       </div>
       <div className="border-t border-gray-800 dark:border-gray-800 light:border-gray-200 p-4 bg-gray-900 dark:bg-gray-900 light:bg-gray-50 sticky bottom-0 z-10 shadow-lg">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            handleSend()
-          }}
-          className="flex gap-2"
-        >
-          <Input
-            placeholder={wallet.connected ? "Type 'send 10 USDC to address...'" : "Connect wallet to send payments..."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            className="flex-1 bg-gray-800 dark:bg-gray-800 light:bg-white border-gray-700 dark:border-gray-700 light:border-gray-300 text-gray-100 dark:text-gray-100 light:text-gray-800 placeholder:text-gray-500"
-          />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={isLoading}
-            className="bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-600 dark:to-indigo-600 light:from-purple-500 light:to-indigo-500 hover:from-purple-700 hover:to-indigo-700"
-          >
-            <Send className="h-4 w-4" />
-            <span className="sr-only">Send message</span>
-          </Button>
-        </form>
+        <ChatInputForm 
+          onSendMessage={handleInputSend} 
+          isLoading={isLoading} 
+          walletConnected={wallet.connected} 
+        />
       </div>
     </div>
   )
 }
-

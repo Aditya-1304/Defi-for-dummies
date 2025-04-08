@@ -16,12 +16,58 @@ export type TokenInfo = {
   logoURI?: string;
 };
 
+const mintInfoCache: Record<string, any> = {};
+
+let hasPreloaded = false;
+
+
 // Cache tokens per network to reduce RPC calls
 export const tokenCache: Record<string, Record<string, TokenInfo>> = {
   localnet: {},
   devnet: {},
   mainnet: {},
 };
+
+export function preloadTokensFromLocalStorage(): void {
+  if (typeof window === 'undefined') return;
+
+  if(hasPreloaded) {
+    console.log("Token preloading already done");
+    return;
+  }
+  
+  const networks = ["localnet", "devnet", "mainnet"];
+  
+  for (const network of networks) {
+    // Get all keys from localStorage that match our token pattern
+    const tokenKeys = Object.keys(localStorage).filter(key => 
+      key.startsWith(`token_${network}_`)
+    );
+    
+    for (const key of tokenKeys) {
+      try {
+        // Extract the token symbol from the key (token_network_SYMBOL)
+        const tokenSymbol = key.split('_')[2];
+        const cachedToken = localStorage.getItem(key);
+        
+        if (cachedToken) {
+          const parsed = JSON.parse(cachedToken);
+          tokenCache[network][tokenSymbol] = {
+            mint: new PublicKey(parsed.address),
+            decimals: parsed.decimals,
+            symbol: tokenSymbol,
+            name: `${tokenSymbol} Test Token`
+          };
+          console.log(`Preloaded ${tokenSymbol} token on ${network} from localStorage`);
+        }
+      } catch (error) {
+        console.error(`Error preloading token from ${key}:`, error);
+      }
+    }
+  }
+  hasPreloaded = true;
+  console.log('Token preloading complete:', tokenCache);
+}
 
 // Well-known token addresses for different networks
 export const KNOWN_TOKENS: Record<string, Record<string, string>> = {
@@ -520,4 +566,12 @@ export async function mintMoreTokens(
     console.error(`Error minting ${tokenSymbol}:`, error);
     throw error;
   }
+}
+
+async function getMinInfo(connection: Connection, mintAddress: PublicKey) {
+  const key = mintAddress.toString();
+  if (!mintInfoCache[key]) {
+    mintInfoCache[key] = await getMint(connection, mintAddress);
+  }
+  return mintInfoCache[key];
 }
