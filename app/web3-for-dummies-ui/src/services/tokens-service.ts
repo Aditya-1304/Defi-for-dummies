@@ -1052,6 +1052,7 @@ export async function cleanupUnwantedTokens(
   removedTokens?: number;
   recoveredSOL?: number;
   burnedTokens?: {[symbol: string]: number};
+  signatures?: string[];
 }> {
   if (!wallet?.publicKey) {
     return {
@@ -1298,13 +1299,18 @@ export async function cleanupUnwantedTokens(
     }
     
     message += `Successfully closed ${closedCount} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`;
+
+    const signatures: string[] = [];
+    const signature = await wallet.sendTransaction(close, connection);
+  signatures.push(signature);
     
     return {
       success: true,
       message,
       removedTokens: closedCount,
       recoveredSOL: estimatedRecoveredSOL,
-      burnedTokens
+      burnedTokens,
+      signatures 
     };
   } catch (error: any) {
     console.error("Error cleaning up tokens:", error);

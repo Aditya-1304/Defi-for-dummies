@@ -206,6 +206,11 @@ export function ChatInterface() {
       addAIMessage(`❌ Error clearing token cache: ${error.message}`);
     }
   }
+  const getExplorerLink = (signature: string, network: string) => {
+    return network === "mainnet"
+      ? `https://explorer.solana.com/tx/${signature}`
+      : `https://explorer.solana.com/tx/${signature}?cluster=${network}`;
+  };
   const handleCleanupAllTokens = async () => {
     if (!wallet.connected || !wallet.publicKey) {
       addAIMessage("Please connect your wallet to clean up tokens.");
@@ -232,12 +237,16 @@ export function ChatInterface() {
         effectiveNetwork as "localnet" | "devnet" | "mainnet",
         true // Burn tokens before closing accounts
       );
-      
       if (result.success) {
         if (result.removedTokens === 0) {
           addAIMessage(`No tokens found to clean up.`);
         } else {
-          addAIMessage(`✅ ${result.message}`);
+          if ('signature' in result && result.signature) {
+            const explorerUrl = getExplorerLink(result.signature as string, effectiveNetwork);
+            addAIMessage(`✅ ${result.message}\n\nView transaction in [Solana Explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`✅ ${result.message}`);
+          }
         }
       } else {
         addAIMessage(`❌ ${result.message}`);
@@ -403,10 +412,16 @@ export function ChatInterface() {
         );
         
         if (result.success) {
-          addAIMessage(`✅ ${result.message}`);
+                  if (result.signature && typeof result.signature === 'string') {
+                    const signature = result.signature as string;
+                    const explorerUrl = getExplorerLink(signature, effectiveNetwork);
+                    addAIMessage(`✅ ${result.message}\n\nView in [Solana Explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`✅ ${result.message}`);
+          }
         } else {
           addAIMessage(`❌ ${result.message}`);
-        }
+        }            
         
         setIsLoading(false);
         return;
@@ -453,6 +468,9 @@ export function ChatInterface() {
           if (result.success) {
             if (result.removedTokens === 0) {
               addAIMessage(`No eligible token accounts found to clean up.`);
+            } else if ('signature' in result && result.signature && typeof result.signature === 'string') {
+              const explorerUrl = getExplorerLink(result.signature as string, effectiveNetwork);
+              addAIMessage(`✅ ${result.message}\n\nView transaction in [Solana Explorer](${explorerUrl})`);
             } else {
               addAIMessage(`✅ ${result.message}`);
             }
@@ -625,7 +643,12 @@ export function ChatInterface() {
               { initialOnly: false }
             );
           } else {
-            addAIMessage(`❌ ${result.message}`);
+            if ('signature' in result && result.signature && typeof result.signature === 'string') {
+              const explorerUrl = getExplorerLink(result.signature, effectiveNetwork);
+              addAIMessage(`❌ ${result.message}\n\nCheck details in [Solana Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`❌ ${result.message}`);
+            }
           }
         } catch (error: any) {
           console.error("Error burning tokens:", error);
