@@ -1329,3 +1329,218 @@ export async function cleanupUnwantedTokens(
     };
   }
 }
+
+export async function burnSpecificTokenAmount(
+  connection: Connection,
+  wallet: any,
+  tokenSymbol: string,
+  amount: number,
+  network: "localnet" | "devnet" | "mainnet",
+  closeAccountIfEmpty: boolean = true
+
+): Promise<{
+  success: boolean;
+  message: string;
+  signature?: string;
+}> {
+  if (!wallet.publicKey) {
+    return {
+      success: false,
+      message: "Wallet not connected"
+    };
+  }
+
+  try {
+    console.log(`🔥 Burning ${amount} ${tokenSymbol} tokens on ${network}...`);
+    
+    const upperSymbol = tokenSymbol.toUpperCase();
+    
+    // Get all token accounts owned by the wallet
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      wallet.publicKey,
+      { programId: TOKEN_PROGRAM_ID }
+    );
+    
+    // Find the specific token account
+    let targetAccount = null;
+    let tokenInfo = null;
+    
+    for (const account of tokenAccounts.value) {
+      const parsedInfo = account.account.data.parsed.info;
+      const mintAddress = parsedInfo.mint;
+      const balance = parsedInfo.tokenAmount.uiAmount || 0;
+      const decimals = parsedInfo.tokenAmount.decimals || 0;
+      
+      // Skip accounts with zero balance
+      if (balance === 0) continue;
+      
+      // Check if this matches our target token
+      let symbol = "Unknown";
+      
+      // Check localStorage mappings
+      const persistedMappings = getTokenMappingsFromLocalStorage(network);
+      for (const [knownMint, info] of Object.entries(persistedMappings)) {
+        if (knownMint === mintAddress) {
+          symbol = info.symbol;
+          break;
+        }
+      }
+      
+      // Check in-memory cache if not found
+      if (symbol === "Unknown" && tokenCache[network]) {
+        for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+          if (info.mint.toString() === mintAddress) {
+            symbol = cachedSymbol;
+            break;
+          }
+        }
+      }
+      
+      if (symbol.toUpperCase() === upperSymbol) {
+        targetAccount = {
+          pubkey: account.pubkey,
+          mint: mintAddress,
+          balance,
+          decimals,
+          rawAmount: parsedInfo.tokenAmount.amount
+        };
+        break;
+      }
+    }
+    
+    if (!targetAccount) {
+      return {
+        success: false,
+        message: `No ${tokenSymbol} tokens found in your wallet`
+      };
+    }
+    
+    if (targetAccount.balance < amount) {
+      return {
+        success: false,
+        message: `Insufficient balance: you have ${targetAccount.balance} ${tokenSymbol}, but tried to burn ${amount}`
+      };
+    }
+    
+    // Calculate the raw amount to burn
+    const rawBurnAmount = BigInt(Math.floor(amount * Math.pow(10, targetAccount.decimals)));
+    
+    const willBeEmpty = targetAccount.balance <= amount;
+    // Create transaction to burn the tokens
+    const burnTransaction = new Transaction();
+    
+    burnTransaction.add(
+      createBurnInstruction(
+        targetAccount.pubkey,
+        new PublicKey(targetAccount.mint),
+        wallet.publicKey,
+        rawBurnAmount,
+        []
+      )
+    );
+    if (willBeEmpty && closeAccountIfEmpty) {
+      console.log("Account will be empty after burn, adding close instruction");
+      burnTransaction.add(
+        createCloseAccountInstruction(
+          targetAccount.pubkey,
+          wallet.publicKey,
+          wallet.publicKey,
+          []
+        )
+      );
+    }
+    // Get fresh blockhash
+    const { blockhash } = await connection.getLatestBlockhash();
+    burnTransaction.recentBlockhash = blockhash;
+    burnTransaction.feePayer = wallet.publicKey;
+    
+    console.log(`Sending burn transaction for ${amount} ${tokenSymbol}...`);
+    
+    // Sign and send the transaction
+    const signedTx = await wallet.signTransaction(burnTransaction);
+    const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+      skipPreflight: true
+    });
+    
+    console.log(`Transaction sent with signature ${signature}`);
+    
+    // Wait for confirmation
+    if (network === "devnet") {
+      try {
+        // For devnet, use longer timeout and more retries
+        const confirmationOptions = {
+          commitment: 'confirmed' as web3.Commitment,
+          maxRetries: 60 // More retries for devnet
+        };
+        
+        // Start a timeout that will provide status update if confirmation takes too long
+        const timeoutId = setTimeout(() => {
+          console.log("Transaction confirmation taking longer than expected, but it may still succeed");
+        }, 10000); // Show message after 10 seconds
+        
+        await connection.confirmTransaction(signature, confirmationOptions.commitment);
+        
+        // Clear the timeout if we get here
+        clearTimeout(timeoutId);
+        
+        console.log(`Successfully burned ${amount} ${tokenSymbol} tokens`);
+        return {
+          success: true,
+          message: `Successfully burned ${amount} ${tokenSymbol} tokens`,
+          signature // Include signature for reference
+        };
+      } catch (error) {
+        console.warn("Confirmation error, but transaction may still be successful:", error);
+        
+        // Check transaction status directly
+        try {
+          const status = await connection.getSignatureStatus(signature);
+          console.log("Transaction status:", status);
+          
+          if (status.value && !status.value.err) {
+            return {
+              success: true,
+              message: `Burned ${amount} ${tokenSymbol} tokens (Transaction confirmed on explorer: ${signature})`,
+              signature
+            };
+          } else if (status.value?.err) {
+            return {
+              success: false,
+              message: `Failed to burn tokens: ${status.value.err.toString()}`,
+              signature
+            };
+          } else {
+            return {
+              success: true,
+              message: `Transaction sent (${signature}), but confirmation timed out. Check the explorer to confirm it succeeded.`,
+              signature
+            };
+          }
+        } catch (statusError) {
+          console.error("Error checking transaction status:", statusError);
+          return {
+            success: true, // Assume success since we know the transaction was sent
+            message: `Transaction may have succeeded (${signature}). Please check Solana Explorer to verify.`,
+            signature
+          };
+        }
+      }
+    } else {
+      // For other networks, use standard confirmation
+      await connection.confirmTransaction(signature);
+      console.log(`Successfully burned ${amount} ${tokenSymbol} tokens`);
+      return {
+        success: true,
+        message: `Successfully burned ${amount} ${tokenSymbol} tokens`,
+        signature
+      };
+    }
+    
+  } catch (error: any) {
+    console.error(`Error burning tokens:`, error);
+    return {
+      success: false,
+      message: `Failed to burn tokens: ${error.message}`
+    };
+  }
+}

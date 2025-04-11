@@ -15,7 +15,7 @@ import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
 
 import dynamic from 'next/dynamic'
-import { cleanupUnwantedTokens } from "@/services/tokens-service"
+import { burnSpecificTokenAmount, cleanupUnwantedTokens } from "@/services/tokens-service"
 
 // Lazy load heavy components
 const NetworkSwitcher = dynamic(
@@ -433,6 +433,77 @@ export function ChatInterface() {
         setIsLoading(false);
         return;
       }
+
+      if (parsedInstruction.burnSpecificAmount) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to burn tokens.");
+          setIsLoading(false);
+          return;
+        }
+      
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        const token = parsedInstruction.token || "USDC";
+        const amount = parsedInstruction.burnAmount || 0;
+        
+        addAIMessage(`Burning ${amount} ${token} tokens on ${effectiveNetwork}...`);
+        
+        try {
+          const result = await burnSpecificTokenAmount(
+            connection,
+            wallet,
+            token,
+            amount,
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            true
+          );
+          
+          if (result.success) {
+            if (result.signature) {
+              // Create a Solana explorer link for the transaction
+              const explorerUrl = effectiveNetwork === "mainnet" 
+                ? `https://explorer.solana.com/tx/${result.signature}` 
+                : `https://explorer.solana.com/tx/${result.signature}?cluster=${effectiveNetwork}`;
+                
+              addAIMessage(`✅ ${result.message} [View on Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            if (result.signature) {
+              const explorerUrl = effectiveNetwork === "mainnet" 
+                ? `https://explorer.solana.com/tx/${result.signature}` 
+                : `https://explorer.solana.com/tx/${result.signature}?cluster=${effectiveNetwork}`;
+                
+              addAIMessage(`❌ ${result.message} [Check status](${explorerUrl})`);
+            } else {
+              addAIMessage(`❌ ${result.message}`);
+            }
+          }
+        } catch (error: any) {
+          console.error("Specific burn error:", error);
+          
+          // Try to extract signature from error if possible
+          const signatureMatch = error.message?.match(/signature\s([A-Za-z0-9]+)/);
+          const signature = signatureMatch ? signatureMatch[1] : null;
+          
+          if (signature) {
+            const explorerUrl = effectiveNetwork === "mainnet" 
+              ? `https://explorer.solana.com/tx/${signature}` 
+              : `https://explorer.solana.com/tx/${signature}?cluster=${effectiveNetwork}`;
+              
+            addAIMessage(`⚠️ Transaction sent but confirmation timed out. [Check status on explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`❌ Failed to burn tokens: ${error.message}`);
+          }
+        }
+        
+        setIsLoading(false);
+        return;
+      }
+      
 
       // Lower the confidence threshold for Gemini
       if (parsedInstruction.isPayment && parsedInstruction.confidence > 0.5) {
