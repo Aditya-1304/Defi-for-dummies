@@ -4,6 +4,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/(ui)/theme-provider";
 import { WalletContextProvider } from "@/components/wallet/wallet-provider";
 import { NetworkProvider } from "@/components/(ui)/network-context";
+import { TokenProvider } from "@/components/(ui)/token-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,7 +32,9 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={true}>
           <NetworkProvider>
             <WalletContextProvider>
+              <TokenProvider>
             {children}
+              </TokenProvider>
             </WalletContextProvider>
           </NetworkProvider>
         </ThemeProvider>

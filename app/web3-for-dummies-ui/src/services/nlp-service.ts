@@ -48,11 +48,11 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     network: 'localnet',
     confidence: 1.0,
   },
-  'mint 100 usdc': {
+  'mint 10 usdc': {
     isPayment: false,
     isBalanceCheck: false,
     isMintRequest: true,
-    amount: 100,
+    amount: 10,
     token: 'USDC',
     network: 'localnet',
     confidence: 1.0,
@@ -66,6 +66,15 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     network: 'localnet',
     confidence: 1.0,
   },
+  'mint 50 usdc': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isMintRequest: true,
+  amount: 50,  // This is explicitly 50, not 100
+  token: 'USDC',
+  network: 'localnet',
+  confidence: 1.0,
+},
 };
 
 export interface PaymentInstruction {
@@ -153,6 +162,13 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     1. A cryptocurrency payment instruction, or
     2. A balance check request.
     3. A token minting request (new feature)
+
+    IMPORTANT FOR MINT REQUESTS: Always extract the exact number specified in the command.
+    - "mint 10 nix" should return amount = 10, not 100
+    - "mint 15 adi" should return amount = 15, not 100
+    - "mint 25 usdc" should return amount = 25, not 100
+    - Only use 100 as default when no specific amount is provided (e.g. "mint usdc")
+
     
     Extract the following information if present:
     1. Is this a payment instruction? (true/false)
@@ -169,11 +185,12 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - If user just types "balance", "show balance", "show all balances" or similar without specifying any token, mark as isCompleteBalanceCheck = true
     - If specific token is mentioned (like "SOL balance"), set token = "SOL" and isCompleteBalanceCheck = false
 
-    For token minting requests: 
-    - "mint 100 USDC" means create 100 USDC tokens
-    - "create BONK token" means mint 100 BONK tokens (default amount)
-    - "mint JUP" means mint 100 JUP tokens (default amount)
-    
+    For token minting requests examples: 
+    - "mint 10 USDC" -> amount = 10, token = "USDC"
+    - "mint 25 NIX" -> amount = 25, token = "NIX" 
+    - "mint 5 ADI" -> amount = 5, token = "ADI"
+    - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
+
     For example:
   - "Check my balance on devnet" -> network = "devnet" , isBalanceCheck = true
     - "Send 10 SOL to FwPnvvnMK2RVmZjaBwCZ6wgiNuAFkz4k1qvT36fkHojS" -> isPayment = true
@@ -220,8 +237,11 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isBalanceCheck: !!parsedResult.isBalanceCheck,
       isCompleteBalanceCheck: !!parsedResult.isCompleteBalanceCheck,
       isMintRequest: !!parsedResult.isMintRequest,
-      amount: typeof parsedResult.amount === 'number' ? parsedResult.amount : 
-              (parsedResult.amount === null ? undefined : parseFloat(parsedResult.amount)),
+      amount: parsedResult.amount !== null && parsedResult.amount !== undefined 
+    ? (typeof parsedResult.amount === 'number' 
+      ? parsedResult.amount 
+      : parseFloat(String(parsedResult.amount)))
+    : parsedResult.isMintRequest && !parsedResult.amount ? 100 : undefined,
       token: parsedResult.token || "SOL", // Default to SOL for localnet
       recipient: parsedResult.recipient || undefined,
       network: parsedResult.network || "localnet",
@@ -256,21 +276,23 @@ function parseWithRegex(message: string): PaymentInstruction {
     let token = 'USDC';
     let amount = 100; // Default amount
     
-    const tokenMatches = lowerMessage.match(/mint\s+(\d+)\s+([a-z]+)/i) || 
-                          lowerMessage.match(/create\s+(\d+)\s+([a-z]+)/i) ||
-                          lowerMessage.match(/mint\s+([a-z]+)/i) ||
-                          lowerMessage.match(/create\s+([a-z]+)\s+token/i);
-    
-    if (tokenMatches && tokenMatches.length > 1) {
-      if (tokenMatches.length > 2) {
-        // Format is "mint 100 USDC"
-        amount = parseFloat(tokenMatches[1]);
-        token = tokenMatches[2].toUpperCase();
+      const amountTokenPattern = /mint\s+(\d+(?:\.\d+)?)\s+([a-z]+)/i;
+      const tokenOnlyPattern = /mint\s+([a-z]+)(?!\d)/i;
+      
+      // First try to match the pattern with amount
+      const amountTokenMatch = lowerMessage.match(amountTokenPattern);
+      if (amountTokenMatch) {
+        amount = parseFloat(amountTokenMatch[1]);
+        token = amountTokenMatch[2].toUpperCase();
+        console.log(`Parsed mint command: ${amount} ${token}`);
       } else {
-        // Format is "mint USDC"
-        token = tokenMatches[1].toUpperCase();
+        // If no amount found, try to match just token
+        const tokenOnlyMatch = lowerMessage.match(tokenOnlyPattern);
+        if (tokenOnlyMatch) {
+          token = tokenOnlyMatch[1].toUpperCase();
+          console.log(`Parsed mint command with default amount: 100 ${token}`);
+        }
       }
-    }
     
     return {
       isPayment: false,

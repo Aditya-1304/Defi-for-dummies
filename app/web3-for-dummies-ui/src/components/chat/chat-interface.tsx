@@ -346,14 +346,17 @@ export function ChatInterface() {
           setIsLoading(false);
           return;
         }
-        
+        console.log("Mint request detected with parsed instruction:", parsedInstruction);
+  
         const token = parsedInstruction.token || "USDC";
-        const amount = parsedInstruction.amount || 100;
+        const amount = parsedInstruction.amount !== null ? parsedInstruction.amount : 100;
+        
         
         const params = new URLSearchParams(window.location.search);
         const urlNetwork = params.get("network");
         const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
         
+        console.log(`About to mint ${amount} ${token} tokens on ${effectiveNetwork}`);
         addAIMessage(`Minting ${amount} ${token} tokens on ${effectiveNetwork}...`);
         
         const result = await mintTestTokens(

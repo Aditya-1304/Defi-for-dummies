@@ -2,15 +2,19 @@
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNetwork } from "@/components/(ui)/network-context";
+import { useTokens } from "@/components/(ui)/token-context";
 
 export function NetworkSwitcher() {
   const { network, setNetwork } = useNetwork();
+  const { refreshTokens } = useTokens();
 
   const handleNetworkChange = (newNetwork: string) => {
     console.log("Network change requested:", newNetwork);
     
     // Update the network context instead of reloading the page
     setNetwork(newNetwork as "localnet" | "devnet" | "mainnet");
+
+    refreshTokens();
   };
 
   return (
