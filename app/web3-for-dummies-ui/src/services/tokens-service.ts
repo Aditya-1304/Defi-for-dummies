@@ -16,6 +16,41 @@ export type TokenInfo = {
   logoURI?: string;
 };
 
+function saveTokenMappingToLocalStorage(network: string, mintAddress: string, tokenInfo: {
+  symbol: string;
+  decimals: number;
+}) {
+  if (typeof window === 'undefined') return;
+  
+  try {
+    const storageKey = `token-mapping-${network}`;
+    const existing = localStorage.getItem(storageKey);
+    const mappings = existing ? JSON.parse(existing) : {};
+    
+    mappings[mintAddress] = tokenInfo;
+    localStorage.setItem(storageKey, JSON.stringify(mappings));
+    console.log(`Saved token mapping for ${tokenInfo.symbol} (${mintAddress}) on ${network}`);
+  } catch (err) {
+    console.error("Failed to save token mapping to localStorage:", err);
+  }
+}
+
+function getTokenMappingsFromLocalStorage(network: string): Record<string, {
+  symbol: string;
+  decimals: number;
+}> {
+  if (typeof window === 'undefined') return {};
+  
+  try {
+    const storageKey = `token-mapping-${network}`;
+    const existing = localStorage.getItem(storageKey);
+    return existing ? JSON.parse(existing) : {};
+  } catch (err) {
+    console.error("Failed to get token mappings from localStorage:", err);
+    return {};
+  }
+}
+
 const mintInfoCache: Record<string, any> = {};
 
 let hasPreloaded = false;
@@ -509,6 +544,8 @@ export async function mintMoreTokens(
 
     let accountExists = false;
 
+    
+
     try{
       const accountInfo = await connection.getAccountInfo(tokenAccountAddress);
       accountExists = !!accountInfo;
@@ -532,6 +569,7 @@ export async function mintMoreTokens(
     }
     // Create a mint transaction
     const mintAmount = amount * Math.pow(10, tokenInfo.decimals);
+    
     
     // Add mint instruction - the wallet is the mint authority because we set it that way in createNewToken
     transaction.add(
@@ -561,7 +599,15 @@ export async function mintMoreTokens(
     await connection.confirmTransaction(signature);
     
     console.log(`Minted ${amount} ${tokenSymbol} with signature: ${signature}`);
+    // Save token mapping to localStorage for persistence across server restarts
+    saveTokenMappingToLocalStorage(network, tokenInfo.mint.toString(), {
+      symbol: upperSymbol,
+      decimals: tokenInfo.decimals
+    });
+
+    console.log(`Minted ${amount} ${tokenSymbol} with signature: ${signature}`);
     return true;
+  
   } catch (error: any) {
     console.error(`Error minting ${tokenSymbol}:`, error);
     throw error;
@@ -574,4 +620,107 @@ async function getMinInfo(connection: Connection, mintAddress: PublicKey) {
     mintInfoCache[key] = await getMint(connection, mintAddress);
   }
   return mintInfoCache[key];
+}
+
+export async function fetchUserTokens(
+  connection: Connection,
+  walletAddress: PublicKey,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{
+  mint: string;
+  balance: number;
+  symbol: string;
+  decimals: number;
+}[]> {
+  if (!connection || !walletAddress) {
+    console.log("Missing connection or wallet address");
+    return [];
+  }
+  
+  try {
+    console.log(`Fetching on-chain tokens for ${walletAddress.toString()} on ${network}...`);
+    
+    // Get all token accounts owned by the user
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      walletAddress,
+      { programId: TOKEN_PROGRAM_ID }
+    );
+
+    
+    
+    console.log(`Found ${tokenAccounts.value.length} token accounts`);
+    
+    // Process token accounts
+    const tokens = tokenAccounts.value
+      .map(account => {
+        try {
+          const parsedInfo = account.account.data.parsed.info;
+          const mintAddress = parsedInfo.mint;
+          const balance = parsedInfo.tokenAmount.uiAmount;
+          
+          // Skip tokens with zero balance
+          if (balance === 0) return null;
+          
+          // Try to find token symbol
+          let symbol = "Unknown";
+          let tokenInfo = null;
+          
+          // Check in token cache first
+          if (tokenCache[network]) {
+            for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+              if (info.mint?.toString() === mintAddress) {
+                symbol = cachedSymbol;
+                tokenInfo = info;
+                break;
+              }
+            }
+          }
+          
+          
+          // Check in known tokens
+          if (symbol === "Unknown" && KNOWN_TOKENS[network]) {
+            for (const [knownSymbol, knownAddress] of Object.entries(KNOWN_TOKENS[network])) {
+              if (knownAddress === mintAddress) {
+                symbol = knownSymbol;
+                break;
+              }
+            }
+          }
+          
+          console.log(`Found token: ${mintAddress} (${symbol}) with ${balance} balance`);
+          
+          return {
+            mint: mintAddress,
+            balance,
+            symbol,
+            decimals: parsedInfo.tokenAmount.decimals
+          };
+        } catch (err) {
+          console.error("Error processing token account:", err);
+          return null;
+        }
+      })
+      .filter((token): token is { mint: string; balance: number; symbol: string; decimals: number; } => token !== null);
+    
+    // Add native SOL balance
+    try {
+      const solBalance = await connection.getBalance(walletAddress);
+      if (solBalance > 0) {
+        tokens.push({
+          mint: "SOL", // Special case for native SOL
+          balance: solBalance / 1_000_000_000, // Convert lamports to SOL
+          symbol: "SOL",
+          decimals: 9
+        });
+      }
+    } catch (err) {
+      console.error("Error fetching SOL balance:", err);
+    }
+    
+    console.log(`Found ${tokens.length} tokens with non-zero balance on ${network}`);
+    return tokens;
+  } catch (error) {
+    console.error("Error fetching user tokens:", error);
+    return [];
+  }
 }
