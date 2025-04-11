@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { motion, AnimatePresence } from "framer-motion"
-import { Send } from "lucide-react"
+import { Ban, DatabaseZap, Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
 import { executePayment, getWalletBalance, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
@@ -15,6 +15,7 @@ import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
 
 import dynamic from 'next/dynamic'
+import { burnSpecificTokenAmount, burnTokensByMintAddress, cleanupUnwantedTokens, fetchUserTokens, saveTokenMappingsToLocalStorage } from "@/services/tokens-service"
 
 // Lazy load heavy components
 const NetworkSwitcher = dynamic(
@@ -188,6 +189,75 @@ export function ChatInterface() {
     ])
   }
 
+  const clearTokenCache = () => {
+    try {
+      // Clear token mappings for all networks
+      localStorage.removeItem('token-mappings-localnet');
+      localStorage.removeItem('token-mappings-devnet');
+      localStorage.removeItem('token-mappings-mainnet');
+      
+      // Clear any old format keys that might exist
+      localStorage.removeItem('token-mapping-localnet');
+      localStorage.removeItem('token-mapping-devnet');
+      localStorage.removeItem('token-mapping-mainnet');
+      
+      addAIMessage("✅ Token cache cleared successfully. All tokens will display as Unknown until you run 'fix tokens' again.");
+    } catch (error: any) {
+      addAIMessage(`❌ Error clearing token cache: ${error.message}`);
+    }
+  }
+  const getExplorerLink = (signature: string, network: string) => {
+    return network === "mainnet"
+      ? `https://explorer.solana.com/tx/${signature}`
+      : `https://explorer.solana.com/tx/${signature}?cluster=${network}`;
+  };
+  const handleCleanupAllTokens = async () => {
+    if (!wallet.connected || !wallet.publicKey) {
+      addAIMessage("Please connect your wallet to clean up tokens.");
+      return;
+    }
+    
+    // Show confirmation dialog
+    if (!confirm("This will remove ALL tokens from your wallet (except SOL). Continue?")) {
+      return;
+    }
+    
+    const params = new URLSearchParams(window.location.search);
+    const urlNetwork = params.get("network");
+    const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+    
+    addAIMessage(`Cleaning up ALL tokens on ${effectiveNetwork}...`);
+    setIsLoading(true);
+    
+    try {
+      const result = await cleanupUnwantedTokens(
+        connection,
+        wallet,
+        "all", // Target all tokens except SOL
+        effectiveNetwork as "localnet" | "devnet" | "mainnet",
+        true // Burn tokens before closing accounts
+      );
+      if (result.success) {
+        if (result.removedTokens === 0) {
+          addAIMessage(`No tokens found to clean up.`);
+        } else {
+          if ('signature' in result && result.signature) {
+            const explorerUrl = getExplorerLink(result.signature as string, effectiveNetwork);
+            addAIMessage(`✅ ${result.message}\n\nView transaction in [Solana Explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`✅ ${result.message}`);
+          }
+        }
+      } else {
+        addAIMessage(`❌ ${result.message}`);
+      }
+    } catch (error: any) {
+      addAIMessage(`❌ Error cleaning up tokens: ${error.message}`);
+    }
+    
+    setIsLoading(false);
+  };
+
   const handleNewChat = () => {
     // Clear messages in state
     const welcomeMessage = {
@@ -270,73 +340,47 @@ export function ChatInterface() {
       }
 
       if (parsedInstruction.isBalanceCheck) {
-        if (!wallet.connected) {
-          addAIMessage("Please connect your wallet to check your balance.")
-          setIsLoading(false)
-          return
-        }
+        setIsLoading(true);
         
-        // Get network from URL or user input
-        const params = new URLSearchParams(window.location.search)
-        const urlNetwork = params.get("network")
-        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet"
-        
-        // Start with the URL network as default
-        let network = effectiveNetwork
-        
-        const userInputLower = userInput.toLowerCase()
-        if (userInputLower.includes("devnet")) {
-          console.log("Using devnet based on user input")
-          network = "devnet"
-        } else if (userInputLower.includes("mainnet")) {
-          console.log("Using mainnet based on user input") 
-          network = "mainnet"
-        } else if (userInputLower.includes("localnet") || userInputLower.includes("local")) {
-          console.log("Using localnet based on user input")
-          network = "localnet"
-        } else {
-          console.log(`Using current URL network: ${network}`)
-        }
-        
-        // Check if this is a complete balance check or specific token check
-        if (parsedInstruction.isCompleteBalanceCheck) {
-          console.log(`Checking all token balances on ${network}`)
-          addAIMessage(`Checking all your token balances on ${network}...`)
-          
-          const result = await getAllWalletBalances(
-            connection, 
-            wallet, 
-            network as "localnet" | "devnet" | "mainnet",
-            { initialOnly: false }
-          )
-          
-          if (result.success) {
-            addAIMessage(`💰 ${result.message}`)
-          } else {
-            addAIMessage(`❌ ${result?.message || 'Failed to get balances'}`)
+        try {
+          if (!wallet.connected || !wallet.publicKey) {
+            addAIMessage("Please connect your wallet to check your balance.");
+            setIsLoading(false);
+            return;
           }
-        } else {
-          // This is a specific token balance check
-          const token = parsedInstruction.token || "SOL"
-          console.log(`Checking ${token} balance on network: ${network}`)
-          addAIMessage(`Checking your ${token} balance on ${network}...`)
           
-          const result = await getWalletBalance(
+          // Use the same URL params for network consistency
+          const params = new URLSearchParams(window.location.search);
+          const urlNetwork = params.get("network");
+          const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+          
+          addAIMessage(`Checking all your token balances on ${effectiveNetwork}...`);
+          
+          // Use the same fetchUserTokens function as the list all tokens command
+          const tokens = await fetchUserTokens(
             connection, 
-            wallet, 
-            token, 
-            network as "localnet" | "devnet" | "mainnet"
-          )
+            wallet.publicKey, 
+            effectiveNetwork as "localnet" | "devnet" | "mainnet"
+          );
           
-          if (result.success) {
-            addAIMessage(`💰 ${result.message}`)
-          } else {
-            addAIMessage(`❌ ${result?.message || 'Failed to get balance'}`)
+          if (tokens.length === 0) {
+            addAIMessage(`💰 Your ${effectiveNetwork} wallet has no tokens`);
+            setIsLoading(false);
+            return;
           }
+          
+          // Format response similarly to how list all tokens works
+          const tokensList = tokens.map(token => 
+            `• ${token.balance.toFixed(token.decimals === 9 ? 7 : 2)} ${token.symbol}`
+          );
+          
+          addAIMessage(`💰 Your ${effectiveNetwork} wallet balances:\n${tokensList.join('\n')}`);
+        } catch (error: any) {
+          console.error("Balance check error:", error);
+          addAIMessage(`Error checking balance: ${error.message}`);
         }
-        
-        setIsLoading(false)
-        return
+        setIsLoading(false);
+        return;
       }
 
       // In your handleSend function in chat-interface.tsx, add handling for mint requests
@@ -368,11 +412,323 @@ export function ChatInterface() {
         );
         
         if (result.success) {
-          addAIMessage(`✅ ${result.message}`);
+                  if (result.signature && typeof result.signature === 'string') {
+                    const signature = result.signature as string;
+                    const explorerUrl = getExplorerLink(signature, effectiveNetwork);
+                    addAIMessage(`✅ ${result.message}\n\nView in [Solana Explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`✅ ${result.message}`);
+          }
         } else {
           addAIMessage(`❌ ${result.message}`);
+        }            
+        
+        setIsLoading(false);
+        return;
+      }
+
+      if (parsedInstruction.isTokenCleanup) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to clean up tokens.");
+          setIsLoading(false);
+          return;
+        }
+      
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        const target = parsedInstruction.cleanupTarget || "unknown";
+        const shouldBurn = parsedInstruction.burnTokens || false;
+        
+        // Update the message based on action
+        if (shouldBurn) {
+          if (target === "unknown") {
+            addAIMessage(`Burning and cleaning up unknown tokens on ${effectiveNetwork}...`);
+          } else if (Array.isArray(target)) {
+            addAIMessage(`Burning and cleaning up ${target.join(', ')} tokens on ${effectiveNetwork}...`);
+          }
+        } else {
+          if (target === "unknown") {
+            addAIMessage(`Cleaning up unknown tokens on ${effectiveNetwork}...`);
+          } else if (Array.isArray(target)) {
+            addAIMessage(`Cleaning up ${target.join(', ')} tokens on ${effectiveNetwork}...`);
+          }
         }
         
+        try {
+          const result = await cleanupUnwantedTokens(
+            connection,
+            wallet,
+            target,
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            shouldBurn // Pass the burn flag
+          );
+          
+          if (result.success) {
+            if (result.removedTokens === 0) {
+              addAIMessage(`No eligible token accounts found to clean up.`);
+            } else if ('signature' in result && result.signature && typeof result.signature === 'string') {
+              const explorerUrl = getExplorerLink(result.signature as string, effectiveNetwork);
+              addAIMessage(`✅ ${result.message}\n\nView transaction in [Solana Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            addAIMessage(`❌ ${result.message}`);
+          }
+        } catch (error: any) {
+          console.error("Token cleanup error:", error);
+          addAIMessage(`❌ Failed to clean up tokens: ${error.message}`);
+        }
+        
+        setIsLoading(false);
+        return;
+      }
+
+      if (parsedInstruction.burnSpecificAmount) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to burn tokens.");
+          setIsLoading(false);
+          return;
+        }
+      
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        const token = parsedInstruction.token || "USDC";
+        const amount = parsedInstruction.burnAmount || 0;
+        
+        addAIMessage(`Burning ${amount} ${token} tokens on ${effectiveNetwork}...`);
+        
+        try {
+          const result = await burnSpecificTokenAmount(
+            connection,
+            wallet,
+            token,
+            amount,
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            true
+          );
+          
+          if (result.success) {
+            if (result.signature) {
+              // Create a Solana explorer link for the transaction
+              const explorerUrl = effectiveNetwork === "mainnet" 
+                ? `https://explorer.solana.com/tx/${result.signature}` 
+                : `https://explorer.solana.com/tx/${result.signature}?cluster=${effectiveNetwork}`;
+                
+              addAIMessage(`✅ ${result.message} [View on Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            if (result.signature) {
+              const explorerUrl = effectiveNetwork === "mainnet" 
+                ? `https://explorer.solana.com/tx/${result.signature}` 
+                : `https://explorer.solana.com/tx/${result.signature}?cluster=${effectiveNetwork}`;
+                
+              addAIMessage(`❌ ${result.message} [Check status](${explorerUrl})`);
+            } else {
+              addAIMessage(`❌ ${result.message}`);
+            }
+          }
+        } catch (error: any) {
+          console.error("Specific burn error:", error);
+          
+          // Try to extract signature from error if possible
+          const signatureMatch = error.message?.match(/signature\s([A-Za-z0-9]+)/);
+          const signature = signatureMatch ? signatureMatch[1] : null;
+          
+          if (signature) {
+            const explorerUrl = effectiveNetwork === "mainnet" 
+              ? `https://explorer.solana.com/tx/${signature}` 
+              : `https://explorer.solana.com/tx/${signature}?cluster=${effectiveNetwork}`;
+              
+            addAIMessage(`⚠️ Transaction sent but confirmation timed out. [Check status on explorer](${explorerUrl})`);
+          } else {
+            addAIMessage(`❌ Failed to burn tokens: ${error.message}`);
+          }
+        }
+        
+        setIsLoading(false);
+        return;
+      }
+      if (parsedInstruction.listAllTokens) {
+        if (!wallet.connected || !wallet.publicKey) {
+          addAIMessage("Please connect your wallet to list tokens.");
+          setIsLoading(false);
+          return;
+        }
+        
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        setIsLoading(true);
+        try {
+          const tokens = await fetchUserTokens(
+            connection, 
+            wallet.publicKey, 
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            { hideUnknown: false }
+          );
+          
+          if (tokens.length === 0) {
+            addAIMessage("You don't have any tokens in your wallet.");
+          } else {
+            // Format tokens with full mint addresses for burning
+            const tokenList = tokens.map(t => {
+              // Special handling for SOL which doesn't have a real mint address
+              if (t.symbol === "SOL") {
+                return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}`;
+              }
+              // For all other tokens, include the full mint address
+              return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}\n  Mint: \`${t.mint}\``;
+            });
+            
+            addAIMessage(`Your token balances on ${effectiveNetwork}:\n${tokenList.join('\n')}\n\nTo burn a token, copy its mint address and type: \`burn 10 from mint PASTE_ADDRESS_HERE\``);
+          }
+        } catch (error: any) {
+          addAIMessage(`Error listing tokens: ${error.message}`);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
+      if (parsedInstruction.burnByMintAddress) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to burn tokens.");
+          setIsLoading(false);
+          return;
+        }
+      
+        setIsLoading(true);
+        
+        const mintAddress = parsedInstruction.mintAddress;
+        const amount = parsedInstruction.amount || parsedInstruction.burnAmount || 0;
+        
+        // Validate the mint address format
+        if (!mintAddress || mintAddress.includes('...')) {
+          addAIMessage("❌ Please provide the complete mint address. Use the `list all tokens` command to see your tokens with full mint addresses.");
+          setIsLoading(false);
+          return;
+        }
+        
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const urlNetwork = params.get("network");
+          const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+          
+          addAIMessage(`Burning ${amount} tokens from mint address ${mintAddress.substring(0, 8)}... on ${effectiveNetwork}...`);
+          
+          const result = await burnTokensByMintAddress(
+            connection,
+            wallet,
+            mintAddress,
+            amount,
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            true // Close account if empty
+          );
+          
+          if (result.success) {
+            addAIMessage(`✅ ${result.message}`);
+            
+            // Refresh balances after successful burn
+            await getAllWalletBalances(
+              connection, 
+              wallet, 
+              effectiveNetwork as "localnet" | "devnet" | "mainnet",
+              { initialOnly: false }
+            );
+          } else {
+            if ('signature' in result && result.signature && typeof result.signature === 'string') {
+              const explorerUrl = getExplorerLink(result.signature, effectiveNetwork);
+              addAIMessage(`❌ ${result.message}\n\nCheck details in [Solana Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`❌ ${result.message}`);
+            }
+          }
+        } catch (error: any) {
+          console.error("Error burning tokens:", error);
+          
+          // Provide more helpful error messages
+          if (error.message.includes("Non-base58 character")) {
+            addAIMessage("❌ Invalid mint address format. Please use the complete address without any '...' at the end.");
+          } else {
+            addAIMessage(`❌ Error burning tokens: ${error.message}`);
+          }
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      if (parsedInstruction.isFixTokenNames) {
+        setIsLoading(true);
+        try {
+          // Get network from URL parameters
+          const params = new URLSearchParams(window.location.search);
+          const urlNetwork = params.get("network");
+          const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+          
+          // Define known token mappings
+          const knownMappings = {
+            '2P7oDTkYMY9Jq5vt5tPT3QE1eKNcoBbrACWKoBwa3UYb': 'NIX',
+            'Ak8exWsropfAVNgP2SFMPMbeyU5brX8oZvgqKj9xHeaZ': 'USDC', // Add your USDC mint
+            'BwLTw16weBeEGEbRxCFHgxERHsepMWVtLv5sfNnVopro': 'BONK', // Looks like this is your BONK mint
+            // Add more as needed
+          };
+          
+          // Apply the mappings
+          for (const [mintAddress, symbol] of Object.entries(knownMappings)) {
+            saveTokenMappingsToLocalStorage(symbol, mintAddress, effectiveNetwork);
+          }
+          
+          addAIMessage("✅ Fixed token names in your wallet. Please check your balance again.");
+        } catch (error: any) {
+          addAIMessage(`Failed to fix token names: ${error.message}`);
+        }
+        setIsLoading(false);
+        return;
+      }
+      if (parsedInstruction.isTokenCleanup && parsedInstruction.cleanupTarget === "all") {
+        setIsLoading(true);
+        try {
+          if (!wallet.connected || !wallet.publicKey) {
+            addAIMessage("Please connect your wallet to clean up tokens.");
+            setIsLoading(false);
+            return;
+          }
+          
+          // Get network parameter from URL
+          const params = new URLSearchParams(window.location.search);
+          const urlNetwork = params.get("network");
+          const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+          
+          addAIMessage(`Cleaning up ALL tokens on ${effectiveNetwork}...`);
+          
+          const result = await cleanupUnwantedTokens(
+            connection, 
+            wallet,
+            "all", // Use "all" to clean up all tokens
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            true // Burn tokens first
+          );
+          
+          if (result.success) {
+            if (result.removedTokens === 0 && (!result.burnedTokens || Object.keys(result.burnedTokens).length === 0)) {
+              addAIMessage("No tokens found to clean up.");
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            addAIMessage(`❌ ${result.message}`);
+          }
+        } catch (error: any) {
+          console.error("Token cleanup error:", error);
+          addAIMessage(`Error cleaning up tokens: ${error.message}`);
+        }
         setIsLoading(false);
         return;
       }
@@ -559,6 +915,26 @@ export function ChatInterface() {
           >
             <Trash2 className="h-4 w-4 mr-1" />
             <span className="text-sm">New Chat</span>
+          </Button>
+          <Button 
+            onClick={clearTokenCache}
+            variant="ghost" 
+            size="sm"
+            className="text-red-400 hover:text-red-300"
+            title="Clear Token Cache"
+          >
+            <DatabaseZap className="h-4 w-4 mr-1" />
+            <span className="text-sm">Clear Cache</span>
+          </Button>
+          <Button 
+            onClick={handleCleanupAllTokens}
+            variant="ghost" 
+            size="sm"
+            className="text-orange-400 hover:text-orange-300"
+            title="Remove All Tokens"
+          >
+            <Ban className="h-4 w-4 mr-1" />
+            <span className="text-sm">Clear Tokens</span>
           </Button>
           <NetworkSwitcher />
         </div>

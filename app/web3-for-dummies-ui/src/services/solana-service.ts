@@ -1,13 +1,14 @@
 // src/services/solana-service.ts
-import { PublicKey, Transaction, Connection } from '@solana/web3.js';
+import { PublicKey, Transaction, Connection, Keypair, SystemProgram } from '@solana/web3.js';
 import { Program, AnchorProvider, web3, BN } from '@coral-xyz/anchor';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout } from '@solana/spl-token';
 import { Web3ForDummies } from '../public/idl/types/web3_for_dummies';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
-import { getOrCreateToken, getTokenBalance, transferToken, mintMoreTokens, tokenCache } from './tokens-service';
+import { getOrCreateToken, getTokenBalance, transferToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
+
 import * as spl from '@solana/spl-token';
-import { KNOWN_TOKENS } from './tokens-service';
- 
+
+
 
 const IDL = idl;
 
@@ -25,6 +26,24 @@ const PROGRAM_ID = new PublicKey("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv")
 
 // Localnet URL (default Solana validator URL when running locally)
 const LOCALNET_URL=  "http://localhost:8899";
+// Local function to update token cache
+function setTokenInCache(symbol: string, tokenInfo: {mint: PublicKey, decimals: number}, network: "localnet" | "devnet" | "mainnet"): void {
+  if (!tokenCache[network]) tokenCache[network] = {};
+  tokenCache[network][symbol] = {
+    ...tokenInfo,
+    symbol
+  };
+}
+
+// Local function to persist token mappings to localStorage
+function saveTokenMappingsToLocalStorage(mappings: any, network: string, ): void {
+  try {
+    const storageKey = `token-mapping-${network}`;
+    localStorage.setItem(storageKey, JSON.stringify(mappings));
+  } catch (err) {
+    console.error("Failed to save token mappings to localStorage:", err);
+  }
+}
 
 const connectionCache: Record<string, web3.Connection> = {};
 
@@ -618,7 +637,7 @@ export async function getWalletBalance(
     }
     
     // For other tokens, use the on-chain fetching approach
-    const tokens = await fetchUserTokens(connection, wallet, network);
+    const tokens = await fetchUserTokens(connection, wallet.publicKey, network,{ hideUnknown: false });
     const targetToken = tokens.find(t => t.symbol.toUpperCase() === tokenUpperCase);
     
     if (!targetToken) {
@@ -683,26 +702,35 @@ export async function mintTestTokens(
 
         const persistedMappings = getTokenMappingsFromLocalStorage(network);
         let existingTokenMint = null;
-        
-        for (const [mintAddress, tokenInfo] of Object.entries(persistedMappings)) {
-          if (tokenInfo.symbol.toUpperCase() === tokenSymbol) {
-            console.log(`Found existing token ${tokenSymbol} in localStorage with mint ${mintAddress}`);
-            existingTokenMint = new PublicKey(mintAddress);
-            
-            // Also restore to in-memory cache
-            if (!tokenCache[network]) tokenCache[network] = {};
-            tokenCache[network][tokenSymbol] = {
-              mint: existingTokenMint,
-              decimals: tokenInfo.decimals,
-              symbol: tokenSymbol,
-            };
-            break;
-          }
+
+        let tokenInfo = await getOrRecreateTokenMint(connection, wallet, tokenSymbol, network);
+    
+        if (!tokenInfo || !tokenInfo.mint) {
+          return {
+            success: false,
+            message: `Could not find or create mint for ${tokenSymbol}`
+          };
         }
         
+        // for (const [mintAddress, tokenInfo] of Object.entries(persistedMappings)) {
+        //   if (tokenInfo.symbol.toUpperCase() === tokenSymbol) {
+        //     console.log(`Found existing token ${tokenSymbol} in localStorage with mint ${mintAddress}`);
+        //     existingTokenMint = new PublicKey(mintAddress);
+            
+        //     // Also restore to in-memory cache
+        //     if (!tokenCache[network]) tokenCache[network] = {};
+        //     tokenCache[network][tokenSymbol] = {
+        //       mint: existingTokenMint,
+        //       decimals: tokenInfo.decimals,
+        //       symbol: tokenSymbol,
+        //     };
+        //     break;
+        //   }
+        // }
+        
         // Check if we already have created this custom token before
-        if (tokenCache[network] && tokenCache[network][tokenSymbol]) {
-          console.log(`Using existing custom token: ${tokenSymbol}`);
+        // if (tokenCache[network] && tokenCache[network][tokenSymbol]) {
+        //   console.log(`Using existing custom token: ${tokenSymbol}`);
           
           try {
             // Use the existing token mint from cache
@@ -712,11 +740,22 @@ export async function mintTestTokens(
             const signature = await mintMoreCustomTokens(
               networkConnection,
               wallet,
-              TokenMint,
+              tokenInfo.mint,
               amount,
-              tokenCache[network][tokenSymbol].decimals || 9
+              tokenInfo.decimals
             );
             
+            await consolidateTokenMappings(network, tokenSymbol, tokenInfo.mint);
+
+            // Create mapping object in the expected format
+            const tokenMapping = {
+              [tokenInfo.mint.toString()]: {
+                symbol: tokenSymbol,
+                decimals: tokenInfo.decimals
+              }
+            };
+            await saveTokenMappingsToLocalStorage(tokenMapping, network);
+
             return {
               success: true,
               token: tokenSymbol,
@@ -736,7 +775,7 @@ export async function mintTestTokens(
               throw error;
             }
           }
-        }
+        // }
         
         // We need to create a new custom token mint
         console.log(`Creating new custom token: ${tokenSymbol} on devnet`);
@@ -795,7 +834,7 @@ export async function mintTestTokens(
           mintPubkey,
           associatedTokenAccount,
           wallet.publicKey,
-          amount * Math.pow(10, decimals),
+          BigInt(Math.floor(amount * Math.pow(10, decimals))), // Use BigInt for precise amounts
           [],
           spl.TOKEN_PROGRAM_ID
         );
@@ -1216,7 +1255,7 @@ export async function getAllWalletBalances(
     }
     
     // Use the new function to get all tokens directly from blockchain
-    const tokens = await fetchUserTokens(connection, wallet, network, {hideUnknown: true});
+    const tokens = await fetchUserTokens(connection, wallet.publicKey, network,{ hideUnknown: false });
     
     if (tokens.length === 0) {
       return {
@@ -1502,5 +1541,225 @@ function getTokenMappingsFromLocalStorage(network: string): Record<string, {
   } catch (err) {
     console.error("Failed to get token mappings from localStorage:", err);
     return {};
+  }
+}
+
+async function getTokenInfo(
+  symbol: string,
+  network: "localnet" | "devnet" | "mainnet"
+): Promise<{mint: PublicKey, decimals: number} | null> {
+  // Check in-memory cache first
+  if (tokenCache[network] && tokenCache[network][symbol]) {
+    return {
+      mint: tokenCache[network][symbol].mint,
+      decimals: tokenCache[network][symbol].decimals
+    };
+  }
+  
+  // If not in memory, check localStorage
+  const persistedMappings = getTokenMappingsFromLocalStorage(network);
+  
+  // Look through persisted mappings to find a match by symbol
+  for (const [mintAddress, info] of Object.entries(persistedMappings)) {
+    if (info.symbol === symbol) {
+      const mint = new PublicKey(mintAddress);
+      return {
+        mint,
+        decimals: info.decimals
+      };
+    }
+  }
+  
+  // Not found anywhere
+  return null;
+}
+
+async function getOrRecreateTokenMint(
+  connection: Connection,
+  wallet: any,
+  tokenSymbol: string,
+  network: "localnet" | "devnet" | "mainnet"
+): Promise<{mint: PublicKey, decimals: number} | null> {
+  try {
+    console.log(`Looking up token info for ${tokenSymbol}...`);
+    
+    // First check if we have the mint info cached
+    let tokenInfo = await getTokenInfo(tokenSymbol, network);
+    
+    if (tokenInfo && tokenInfo.mint) {
+      console.log(`Found cached mint: ${tokenInfo.mint.toString()}`);
+      
+      // Verify this mint still exists on-chain
+      try {
+        const mintAccount = await connection.getAccountInfo(tokenInfo.mint);
+        
+        if (mintAccount) {
+          console.log(`Mint account verified on chain`);
+          return tokenInfo;
+        } else {
+          console.log(`Mint account not found on chain, needs recreation`);
+          // Continue to recreation logic below
+        }
+      } catch (error) {
+        console.log(`Error checking mint account, will recreate:`, error);
+        // Continue to recreation logic
+      }
+    }
+    
+    // If we get here, we need to create a new mint
+    console.log(`Creating new mint for ${tokenSymbol}...`);
+    
+    // Create a new mint account
+    const mintKeypair = Keypair.generate();
+    const mintRent = await connection.getMinimumBalanceForRentExemption(
+      MintLayout.span
+    );
+    
+    // Add extra rent SOL to prevent garbage collection
+    const mintSOL = mintRent * 2; // Double the rent to keep it alive longer
+    
+    // Create the mint account
+    const createMintAccountIx = SystemProgram.createAccount({
+      fromPubkey: wallet.publicKey,
+      newAccountPubkey: mintKeypair.publicKey,
+      lamports: mintSOL,
+      space: MintLayout.span,
+      programId: TOKEN_PROGRAM_ID
+    });
+    
+    // Initialize mint
+    const decimals = 6; // Standard for most tokens
+    const initMintIx = createInitializeMintInstruction(
+      mintKeypair.publicKey,
+      decimals,
+      wallet.publicKey,
+      wallet.publicKey
+    );
+    
+    // Create transaction with both instructions
+    const transaction = new Transaction().add(
+      createMintAccountIx,
+      initMintIx
+    );
+    
+    // Get recent blockhash and sign
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.feePayer = wallet.publicKey;
+    transaction.recentBlockhash = blockhash;
+    
+    // Sign transaction
+    transaction.partialSign(mintKeypair);
+    const signedTx = await wallet.signTransaction(transaction);
+    
+    // Send and confirm transaction
+    const signature = await connection.sendRawTransaction(signedTx.serialize());
+    await connection.confirmTransaction(signature);
+    
+    console.log(`Created new mint: ${mintKeypair.publicKey.toString()}`);
+    
+    // Save this new mint to our cache
+    const newTokenInfo = {
+      mint: mintKeypair.publicKey,
+      decimals
+    };
+    
+    // Update token cache
+    await saveTokenInfo(tokenSymbol, newTokenInfo, network);
+    
+    return newTokenInfo;
+  } catch (error) {
+    console.error(`Error creating/getting token mint:`, error);
+    return null;
+  }
+}
+async function saveTokenInfo(
+  symbol: string,
+  tokenInfo: {mint: PublicKey, decimals: number},
+  network: "localnet" | "devnet" | "mainnet"
+): Promise<void> {
+  // Import what you need from tokens-service
+  
+  
+  // Update in-memory cache
+  setTokenInCache(symbol, tokenInfo, network);
+  
+  // Update localStorage
+  const persistedMappings = getTokenMappingsFromLocalStorage(network);
+  persistedMappings[tokenInfo.mint.toString()] = {
+    symbol,
+    decimals: tokenInfo.decimals
+  };
+  saveTokenMappingsToLocalStorage(persistedMappings, network);
+  
+  console.log(`Saved ${symbol} token info to cache and localStorage`);
+}
+/**
+ * Creates a transaction instruction to initialize a new mint
+ * @param mint The public key of the mint account to initialize
+ * @param decimals Number of decimals for the token
+ * @param mintAuthority The account that will have permission to mint tokens
+ * @param freezeAuthority The account that will have permission to freeze token accounts
+ * @returns The instruction to initialize a mint
+ */
+function createInitializeMintInstruction(
+  mint: PublicKey, 
+  decimals: number, 
+  mintAuthority: PublicKey, 
+  freezeAuthority: PublicKey
+) {
+  return spl.createInitializeMintInstruction(
+    mint,
+    decimals,
+    mintAuthority,
+    freezeAuthority,
+    spl.TOKEN_PROGRAM_ID
+  );
+}
+/**
+ * Consolidates token mappings to ensure a single symbol points to one mint
+ */
+async function consolidateTokenMappings(
+  network: string,
+  symbol: string,
+  currentMint: PublicKey
+): Promise<void> {
+  try {
+    const mappings = getTokenMappingsFromLocalStorage(network);
+    const updatedMappings: Record<string, {symbol: string, decimals: number}> = {};
+    const currentMintStr = currentMint.toString();
+    
+    // Find all entries for this symbol
+    const mintAddresses = Object.keys(mappings);
+    let foundCurrent = false;
+    
+    // First pass - keep the current mint and non-conflicting entries
+    for (const mintAddress of mintAddresses) {
+      const info = mappings[mintAddress];
+      
+      // If this is our current mint, mark it found
+      if (mintAddress === currentMintStr) {
+        updatedMappings[mintAddress] = info;
+        foundCurrent = true;
+      }
+      // If this is a different symbol, keep it
+      else if (info.symbol !== symbol) {
+        updatedMappings[mintAddress] = info;
+      }
+      // Otherwise, it's a duplicate we'll discard
+    }
+    
+    // If we didn't find our current mint in the mappings, add it
+    if (!foundCurrent) {
+      updatedMappings[currentMintStr] = {
+        symbol,
+        decimals: tokenCache[network][symbol]?.decimals || 6
+      };
+    }
+    
+    // Save the cleaned mappings
+    saveTokenMappingsToLocalStorage(updatedMappings, network);
+    console.log(`Consolidated token mappings for ${symbol}`);
+  } catch (err) {
+    console.error("Failed to consolidate token mappings:", err);
   }
 }
