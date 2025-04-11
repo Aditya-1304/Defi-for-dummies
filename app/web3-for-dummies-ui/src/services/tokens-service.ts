@@ -3,7 +3,8 @@ import {
   createMint, getMint, getOrCreateAssociatedTokenAccount, createTransferInstruction,
   mintTo, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
   transfer, TOKEN_PROGRAM_ID, TokenAccountNotFoundError,
-  createInitializeMintInstruction, createMintToInstruction
+  createInitializeMintInstruction, createMintToInstruction, createCloseAccountInstruction,
+  createBurnInstruction
 } from "@solana/spl-token";
 import * as web3 from '@solana/web3.js';
 
@@ -722,5 +723,609 @@ export async function fetchUserTokens(
   } catch (error) {
     console.error("Error fetching user tokens:", error);
     return [];
+  }
+}
+
+/**
+ * Cleanup unwanted tokens and recover SOL from account rent
+ */
+// export async function cleanupUnwantedTokens(
+//   connection: Connection,
+//   wallet: any,
+//   tokensToRemove: string[] | "unknown",
+//   network: "localnet" | "devnet" | "mainnet",
+//   burnFirst: boolean = false
+// ): Promise<{
+//   success: boolean;
+//   message: string;
+//   removedTokens?: number;
+//   recoveredSOL?: number;
+//   burnedTokens?: {[symbol: string]: number};
+// }> {
+//   if (!wallet.publicKey) {
+//     return {
+//       success: false,
+//       message: "Wallet not connected"
+//     };
+//   }
+
+//   try {
+//     console.log(`🧹 Cleaning up tokens on ${network}...`);
+    
+//     // Get all token accounts owned by the wallet
+//     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+//       wallet.publicKey,
+//       { programId: TOKEN_PROGRAM_ID }
+//     );
+    
+//     console.log(`Found ${tokenAccounts.value.length} token accounts`);
+
+//     const tokensToBurn: {
+//       account: PublicKey;
+//       mint: string;
+//       symbol: string;
+//       amount: number;
+//       decimals: number;
+//     }[] = [];
+    
+//     // Filter to the ones we want to remove
+//     const accountsToClose = tokenAccounts.value.filter(account => {
+//       const parsedInfo = account.account.data.parsed.info;
+//       const mintAddress = parsedInfo.mint;
+//       const balance = parsedInfo.tokenAmount.uiAmount || 0;
+//       const decimals = parsedInfo.tokenAmount.decimals || 0;
+      
+//       // Skip accounts with non-zero balance (can't close these)
+//       if (balance > 0) {
+//         console.log(`Skipping account with balance ${balance}`);
+//         return false;
+//       }
+      
+//       // If "unknown", keep all accounts with unknown tokens
+//       if (tokensToRemove === "unknown") {
+//         // Check if mint is in our known mappings
+//         let isKnown = false;
+//         let symbol = "Unknown"
+        
+//         // Check localStorage mappings
+//         const persistedMappings = getTokenMappingsFromLocalStorage(network);
+//         for (const [knownMint, tokenInfo] of Object.entries(persistedMappings)) {
+//           if (knownMint === mintAddress) {
+//             isKnown = true;
+//             symbol = tokenInfo.symbol;
+//             break;
+//           }
+//         }
+        
+//         // Check in-memory cache
+//         if (tokenCache[network]) {
+//           for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+//             if (info.mint.toString() === mintAddress) {
+//               isKnown = true;
+//               symbol = cachedSymbol;
+//               break;
+//             }
+//           }
+//         }
+//         console.log(`Token ${mintAddress} identified as ${isKnown ? symbol : "Unknown"}`);
+
+
+//         if (!isKnown && balance > 0 && burnFirst) {
+//           tokensToBurn.push({
+//             account: account.pubkey,
+//             mint: mintAddress,
+//             symbol,
+//             amount: balance,
+//             decimals
+//           });
+//         }
+//         // Return true if this is an unknown token (to be removed)
+//         return !isKnown;
+//       } else if (Array.isArray(tokensToRemove)) {
+//         // Check if the mint matches any in our list
+//         let symbol = "Unknown";
+    
+//     // Check localStorage mappings
+//         const persistedMappings = getTokenMappingsFromLocalStorage(network);
+//         for (const [knownMint, tokenInfo] of Object.entries(persistedMappings)) {
+//           if (knownMint === mintAddress) {
+//             symbol = tokenInfo.symbol;
+//             break;
+//           }
+//         }
+        
+//         // Check in-memory cache if not found
+//         if (symbol === "Unknown" && tokenCache[network]) {
+//           for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+//             if (info.mint.toString() === mintAddress) {
+//               symbol = cachedSymbol;
+//               break;
+//             }
+//           }
+//         }
+    
+//     // Return true if this token's symbol is in our target list
+//         const shouldRemove = tokensToRemove.some(
+//           target => target.toUpperCase() === symbol.toUpperCase()
+//         );
+        
+//         if (shouldRemove) {
+//           console.log(`Selected ${symbol} token for cleanup`);
+
+//           if (balance > 0 && burnFirst) {
+//             tokensToBurn.push({
+//               account: account.pubkey,
+//               mint: mintAddress,
+//               symbol,
+//               amount: balance,
+//               decimals
+//             });
+//           }
+//         }
+//         return shouldRemove;
+//       }
+      
+//       return false;
+//     });
+    
+//     if (accountsToClose.length === 0) {
+//       return {
+//         success: true,
+//         message: "No eligible token accounts found to clean up",
+//         removedTokens: 0,
+//         recoveredSOL: 0
+//       };
+//     }
+    
+//     console.log(`Found ${accountsToClose.length} token accounts to close`);
+    
+//     // Create a transaction to close all eligible accounts
+//   //   const transaction = new Transaction();
+    
+//   //   // Add close instruction for each account
+//   //   for (const accountInfo of accountsToClose) {
+//   //     transaction.add(
+//   //       createCloseAccountInstruction(
+//   //         accountInfo.pubkey, // token account to close
+//   //         wallet.publicKey,   // destination (rent goes here)
+//   //         wallet.publicKey,   // authority
+//   //         []                  // no multisig
+//   //       )
+//   //     );
+//   //   }
+    
+//   //   // Send transaction
+//   //   const { blockhash } = await connection.getLatestBlockhash();
+//   //   transaction.recentBlockhash = blockhash;
+//   //   transaction.feePayer = wallet.publicKey;
+    
+//   //   // Sign and send
+//   //   const signature = await wallet.sendTransaction(transaction, connection);
+//   //   await connection.confirmTransaction(signature);
+    
+//   //   // Calculate recovered SOL (approx. 0.00203928 SOL per token account)
+//   //   const estimatedRecoveredSOL = accountsToClose.length * 0.00203928;
+    
+//   //   return {
+//   //     success: true,
+//   //     message: `Successfully cleaned up ${accountsToClose.length} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`,
+//   //     removedTokens: accountsToClose.length,
+//   //     recoveredSOL: estimatedRecoveredSOL
+//   //   };
+//   // } catch (error: any) {
+//   //   console.error("Error cleaning up tokens:", error);
+//   //   return {
+//   //     success: false,
+//   //     message: `Failed to clean up tokens: ${error.message}`
+//   //   };
+//   // }
+//   const burnedTokens: {[symbol: string]: number} = {};
+    
+//     // If we have tokens to burn, create and send burn transactions first
+//     if (tokensToBurn.length > 0) {
+//       console.log(`Need to burn ${tokensToBurn.length} token balances first`);
+      
+//       // Group burns into batches of 5 to avoid transaction size limits
+//       const burnBatches = [];
+//       for (let i = 0; i < tokensToBurn.length; i += 5) {
+//         burnBatches.push(tokensToBurn.slice(i, i + 5));
+//       }
+      
+//       for (const batch of burnBatches) {
+//         const burnTransaction = new Transaction();
+        
+//         for (const token of batch) {
+//           // Create burn instruction
+//           burnTransaction.add(
+//             createBurnInstruction(
+//               token.account,                 // Token account
+//               new PublicKey(token.mint),     // Mint
+//               wallet.publicKey,              // Owner
+//               BigInt(Math.floor(token.amount * Math.pow(10, token.decimals))), // Amount
+//               []                             // Multisignature
+//             )
+//           );
+          
+//           // Track burned token for reporting
+//           if (!burnedTokens[token.symbol]) {
+//             burnedTokens[token.symbol] = 0;
+//           }
+//           burnedTokens[token.symbol] += token.amount;
+//         }
+        
+//         // Send burn transaction
+//         const { blockhash } = await connection.getLatestBlockhash();
+//         burnTransaction.recentBlockhash = blockhash;
+//         burnTransaction.feePayer = wallet.publicKey;
+        
+//         const burnSignature = await wallet.sendTransaction(burnTransaction, connection);
+//         await connection.confirmTransaction(burnSignature);
+        
+//         console.log(`Burned tokens batch with signature: ${burnSignature}`);
+//       }
+//     }
+    
+//     // Create transactions to close all eligible accounts
+//     // Group closes into batches of 10 to avoid transaction size limits
+//     const closeBatches = [];
+//     for (let i = 0; i < accountsToClose.length; i += 10) {
+//       closeBatches.push(accountsToClose.slice(i, i + 10));
+//     }
+    
+//     for (const batch of closeBatches) {
+//       const transaction = new Transaction();
+      
+//       // Add close instruction for each account
+//       for (const accountInfo of batch) {
+//         transaction.add(
+//           createCloseAccountInstruction(
+//             accountInfo.pubkey,    // token account to close
+//             wallet.publicKey,      // destination (rent goes here)
+//             wallet.publicKey,      // authority
+//             []                     // no multisig
+//           )
+//         );
+//       }
+      
+//       // Send transaction
+//       const { blockhash } = await connection.getLatestBlockhash();
+//       transaction.recentBlockhash = blockhash;
+//       transaction.feePayer = wallet.publicKey;
+      
+//       // Sign and send
+//       const signature = await wallet.sendTransaction(transaction, connection);
+//       await connection.confirmTransaction(signature);
+      
+//       console.log(`Closed tokens batch with signature: ${signature}`);
+//     }
+    
+//     // Calculate recovered SOL (approx. 0.00203928 SOL per token account)
+//     const estimatedRecoveredSOL = accountsToClose.length * 0.00203928;
+    
+//     // Create report message based on what happened
+//     let message = "";
+//     if (Object.keys(burnedTokens).length > 0) {
+//       message += `Burned: ${Object.entries(burnedTokens)
+//         .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
+//         .join(", ")}\n`;
+//     }
+    
+//     message += `Successfully cleaned up ${accountsToClose.length} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`;
+    
+//     return {
+//       success: true,
+//       message,
+//       removedTokens: accountsToClose.length,
+//       recoveredSOL: estimatedRecoveredSOL,
+//       burnedTokens
+//     };
+//   } catch (error: any) {
+//     console.error("Error cleaning up tokens:", error);
+//     return {
+//       success: false,
+//       message: `Failed to clean up tokens: ${error.message}`
+//     };
+//   }
+// }
+
+/**
+ * Cleanup unwanted tokens and recover SOL from account rent
+ */
+export async function cleanupUnwantedTokens(
+  connection: Connection,
+  wallet: any,
+  tokensToRemove: string[] | "unknown",
+  network: "localnet" | "devnet" | "mainnet",
+  burnFirst: boolean = false
+): Promise<{
+  success: boolean;
+  message: string;
+  removedTokens?: number;
+  recoveredSOL?: number;
+  burnedTokens?: {[symbol: string]: number};
+}> {
+  if (!wallet.publicKey) {
+    return {
+      success: false,
+      message: "Wallet not connected"
+    };
+  }
+
+  try {
+    console.log(`🧹 Cleaning up tokens on ${network}...`);
+    console.log(`Options: tokensToRemove=${typeof tokensToRemove === 'string' ? tokensToRemove : tokensToRemove.join(',')}, burnFirst=${burnFirst}`);
+    
+    // Get all token accounts owned by the wallet
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      wallet.publicKey,
+      { programId: TOKEN_PROGRAM_ID }
+    );
+    
+    console.log(`Found ${tokenAccounts.value.length} token accounts`);
+    
+    // Step 1: Process all token accounts and gather info
+    const processedAccounts = tokenAccounts.value.map(account => {
+      const parsedInfo = account.account.data.parsed.info;
+      const mintAddress = parsedInfo.mint;
+      const balance = parsedInfo.tokenAmount.uiAmount || 0;
+      const decimals = parsedInfo.tokenAmount.decimals || 0;
+      const rawAmount = parsedInfo.tokenAmount.amount;
+      
+      // Get the token symbol by checking known sources
+      let symbol = "Unknown";
+      
+      // Check localStorage mappings first
+      const persistedMappings = getTokenMappingsFromLocalStorage(network);
+      for (const [knownMint, tokenInfo] of Object.entries(persistedMappings)) {
+        if (knownMint === mintAddress) {
+          symbol = tokenInfo.symbol;
+          break;
+        }
+      }
+      
+      // Check in-memory cache if not found
+      if (symbol === "Unknown" && tokenCache[network]) {
+        for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+          if (info.mint.toString() === mintAddress) {
+            symbol = cachedSymbol;
+            break;
+          }
+        }
+      }
+      
+      return {
+        pubkey: account.pubkey,
+        mint: mintAddress,
+        symbol,
+        balance,
+        decimals,
+        rawAmount,
+        isKnown: symbol !== "Unknown"
+      };
+    });
+    
+    // Step 2: Filter accounts based on criteria
+    let accountsToProcess = processedAccounts.filter(account => {
+      // For "unknown", keep only unknown tokens
+      if (tokensToRemove === "unknown") {
+        return !account.isKnown;
+      }
+      // For specific tokens, match the symbols
+      else if (Array.isArray(tokensToRemove)) {
+        return tokensToRemove.some(
+          target => target.toUpperCase() === account.symbol.toUpperCase()
+        );
+      }
+      return false;
+    });
+    
+    console.log(`Found ${accountsToProcess.length} token accounts matching removal criteria`);
+    
+    if (accountsToProcess.length === 0) {
+      return {
+        success: true,
+        message: "No eligible token accounts found to clean up",
+        removedTokens: 0,
+        recoveredSOL: 0
+      };
+    }
+    
+    // Step 3: Separate accounts by whether they need burning or not
+    const accountsWithBalance = accountsToProcess.filter(account => account.balance > 0);
+    const accountsWithoutBalance = accountsToProcess.filter(account => account.balance === 0);
+    
+    console.log(`- ${accountsWithBalance.length} accounts with balance`);
+    console.log(`- ${accountsWithoutBalance.length} accounts with zero balance`);
+    
+    // Track which tokens were burned
+    const burnedTokens: {[symbol: string]: number} = {};
+    
+    // Step 4: If burnFirst is true, burn tokens with balance
+    if (burnFirst && accountsWithBalance.length > 0) {
+      console.log(`Burning tokens for ${accountsWithBalance.length} accounts...`);
+      
+      // Process each token individually for highest success rate
+      for (const account of accountsWithBalance) {
+        console.log(`Processing burn for ${account.balance} ${account.symbol}...`);
+        
+        let success = false;
+        let attempts = 0;
+        const maxAttempts = 5; // More attempts for individual transactions
+        
+        while (!success && attempts < maxAttempts) {
+          attempts++;
+          
+          try {
+            // Create a new transaction for each attempt
+            const burnTransaction = new Transaction();
+            
+            // Add burn instruction
+            console.log(`Creating burn instruction for ${account.balance} ${account.symbol} (${account.mint})`);
+            burnTransaction.add(
+              createBurnInstruction(
+                account.pubkey,
+                new PublicKey(account.mint),
+                wallet.publicKey,
+                BigInt(account.rawAmount),
+                []
+              )
+            );
+            
+            // Track for reporting
+            if (!burnedTokens[account.symbol]) {
+              burnedTokens[account.symbol] = 0;
+            }
+            burnedTokens[account.symbol] += account.balance;
+            
+            // Get fresh blockhash for this attempt
+            const { blockhash } = await connection.getLatestBlockhash();
+            burnTransaction.recentBlockhash = blockhash;
+            burnTransaction.feePayer = wallet.publicKey;
+            
+            console.log(`Sending burn transaction for ${account.symbol} (attempt ${attempts})...`);
+            
+            // Sign and send using the same pattern as your mintMoreTokens function
+            const signedTx = await wallet.signTransaction(burnTransaction);
+            const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+              skipPreflight: true // Skip preflight checks to avoid some errors
+            });
+            
+            console.log(`Transaction sent with signature ${signature}`);
+            
+            // Wait for confirmation - using simple await like in mintMoreTokens
+            await connection.confirmTransaction(signature);
+            
+            console.log(`Burn transaction confirmed for ${account.symbol}!`);
+            success = true;
+            
+            // Wait a moment between tokens
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error(`Error burning ${account.symbol} (attempt ${attempts}):`, error);
+            
+            if (attempts >= maxAttempts) {
+              throw new Error(`Failed to burn ${account.symbol} tokens after ${maxAttempts} attempts`);
+            }
+            
+            // Wait longer between retries - exponential backoff
+            const delay = Math.min(1000 * Math.pow(2, attempts), 8000);
+            console.log(`Will retry in ${delay/1000} seconds...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        }
+      }
+      
+      console.log(`All tokens burned successfully!`);
+      
+      // Wait after all burns are complete
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    // Step 5: Close accounts that have zero balance (or have been burned)
+    const accountsToClose = burnFirst 
+      ? [...accountsWithoutBalance, ...accountsWithBalance] // If we burned, we can close all of them
+      : accountsWithoutBalance;                           // Otherwise, only close empty ones
+    
+      if (accountsToClose.length === 0) {
+        let message = "";
+        if (Object.keys(burnedTokens).length > 0) {
+          // If we burned tokens but have none to close, still show success message
+          const burnedList = Object.entries(burnedTokens)
+            .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
+            .join(", ");
+          message = `✅ Successfully burned: ${burnedList}`;
+        } else {
+          message = "No eligible token accounts found to clean up";
+        }
+        
+        return {
+          success: true,
+          message,
+          removedTokens: 0,
+          recoveredSOL: 0,
+          burnedTokens
+        };
+      }
+    
+    console.log(`Closing ${accountsToClose.length} token accounts...`);
+    
+    // Group close operations into batches of 8
+    const closeBatches = [];
+    for (let i = 0; i < accountsToClose.length; i += 8) {
+      closeBatches.push(accountsToClose.slice(i, i + 8));
+    }
+    
+    let closedCount = 0;
+    
+    for (let i = 0; i < closeBatches.length; i++) {
+      const batch = closeBatches[i];
+      console.log(`Processing close batch ${i+1}/${closeBatches.length} with ${batch.length} accounts`);
+      
+      const closeTransaction = new Transaction();
+      
+      for (const account of batch) {
+        console.log(`- Adding close instruction for ${account.symbol} account`);
+        
+        closeTransaction.add(
+          createCloseAccountInstruction(
+            account.pubkey,       // Token account
+            wallet.publicKey,     // Destination (rent goes here)
+            wallet.publicKey,     // Owner
+            []                    // Multisignature (no additional signers)
+          )
+        );
+      }
+      
+      try {
+        // Get fresh blockhash
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+        closeTransaction.recentBlockhash = blockhash;
+        closeTransaction.feePayer = wallet.publicKey;
+        
+        console.log(`Sending close transaction...`);
+        const closeSignature = await wallet.sendTransaction(closeTransaction, connection);
+        console.log(`Transaction sent with signature ${closeSignature}`);
+        
+        await connection.confirmTransaction({
+          signature: closeSignature,
+          blockhash,
+          lastValidBlockHeight
+        }, 'confirmed');
+        
+        console.log(`Close transaction confirmed!`);
+        closedCount += batch.length;
+      } catch (error) {
+        console.error(`Error in close transaction:`, error);
+        // Don't throw here, so we can report on the accounts we did manage to close
+      }
+    }
+    
+    // Calculate recovered SOL (approx. 0.00203928 SOL per token account)
+    const estimatedRecoveredSOL = closedCount * 0.00203928;
+    
+    // Create report message
+    let message = "";
+    if (Object.keys(burnedTokens).length > 0) {
+      const burnedList = Object.entries(burnedTokens)
+        .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
+        .join(", ");
+      message += `Burned: ${burnedList}\n`;
+    }
+    
+    message += `Successfully closed ${closedCount} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`;
+    
+    return {
+      success: true,
+      message,
+      removedTokens: closedCount,
+      recoveredSOL: estimatedRecoveredSOL,
+      burnedTokens
+    };
+  } catch (error: any) {
+    console.error("Error cleaning up tokens:", error);
+    return {
+      success: false,
+      message: `Failed to clean up tokens: ${error.message}`
+    };
   }
 }

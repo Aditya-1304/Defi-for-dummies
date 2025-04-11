@@ -15,6 +15,7 @@ import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
 
 import dynamic from 'next/dynamic'
+import { cleanupUnwantedTokens } from "@/services/tokens-service"
 
 // Lazy load heavy components
 const NetworkSwitcher = dynamic(
@@ -371,6 +372,62 @@ export function ChatInterface() {
           addAIMessage(`✅ ${result.message}`);
         } else {
           addAIMessage(`❌ ${result.message}`);
+        }
+        
+        setIsLoading(false);
+        return;
+      }
+
+      if (parsedInstruction.isTokenCleanup) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to clean up tokens.");
+          setIsLoading(false);
+          return;
+        }
+      
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+        
+        const target = parsedInstruction.cleanupTarget || "unknown";
+        const shouldBurn = parsedInstruction.burnTokens || false;
+        
+        // Update the message based on action
+        if (shouldBurn) {
+          if (target === "unknown") {
+            addAIMessage(`Burning and cleaning up unknown tokens on ${effectiveNetwork}...`);
+          } else if (Array.isArray(target)) {
+            addAIMessage(`Burning and cleaning up ${target.join(', ')} tokens on ${effectiveNetwork}...`);
+          }
+        } else {
+          if (target === "unknown") {
+            addAIMessage(`Cleaning up unknown tokens on ${effectiveNetwork}...`);
+          } else if (Array.isArray(target)) {
+            addAIMessage(`Cleaning up ${target.join(', ')} tokens on ${effectiveNetwork}...`);
+          }
+        }
+        
+        try {
+          const result = await cleanupUnwantedTokens(
+            connection,
+            wallet,
+            target,
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            shouldBurn // Pass the burn flag
+          );
+          
+          if (result.success) {
+            if (result.removedTokens === 0) {
+              addAIMessage(`No eligible token accounts found to clean up.`);
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            addAIMessage(`❌ ${result.message}`);
+          }
+        } catch (error: any) {
+          console.error("Token cleanup error:", error);
+          addAIMessage(`❌ Failed to clean up tokens: ${error.message}`);
         }
         
         setIsLoading(false);

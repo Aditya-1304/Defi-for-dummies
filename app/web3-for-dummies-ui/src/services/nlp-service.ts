@@ -75,6 +75,72 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
   network: 'localnet',
   confidence: 1.0,
 },
+  'cleanup tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isMintRequest: false,
+    isTokenCleanup: true,
+    cleanupTarget: "unknown",
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'remove unknown tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isMintRequest: false,
+    isTokenCleanup: true,
+    cleanupTarget: "unknown",
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'cleanup unknown tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isMintRequest: false,
+    isTokenCleanup: true,
+    cleanupTarget: "unknown",
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'cleanup adi tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isMintRequest: false,
+  isTokenCleanup: true,
+  cleanupTarget: ["ADI"],
+  network: 'localnet',
+  confidence: 1.0,
+},
+'remove adi tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isMintRequest: false,
+  isTokenCleanup: true,
+  cleanupTarget: ["ADI"],
+  network: 'localnet',
+  confidence: 1.0,
+},
+
+'burn adi tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isMintRequest: false,
+  isTokenCleanup: true,
+  cleanupTarget: ["ADI"],
+  burnTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'burn all adi tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isMintRequest: false,
+  isTokenCleanup: true,
+  cleanupTarget: ["ADI"],
+  burnTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
 };
 
 export interface PaymentInstruction {
@@ -82,6 +148,10 @@ export interface PaymentInstruction {
   isBalanceCheck?: boolean;
   isCompleteBalanceCheck?: boolean;
   isMintRequest?: boolean;
+  // ...existing properties
+  isTokenCleanup?: boolean;  // Add this new property
+  cleanupTarget?: "unknown" | string[];
+  burnTokens?: boolean;
   token?: string;
   amount?: number;
   recipient?: string;
@@ -162,6 +232,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     1. A cryptocurrency payment instruction, or
     2. A balance check request.
     3. A token minting request (new feature)
+    4. A token cleanup request (new feature)
 
     IMPORTANT FOR MINT REQUESTS: Always extract the exact number specified in the command.
     - "mint 10 nix" should return amount = 10, not 100
@@ -191,8 +262,16 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - "mint 5 ADI" -> amount = 5, token = "ADI"
     - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
 
+    For token cleanup requests:
+    - "cleanup tokens" -> isTokenCleanup = true, cleanupTarget = "unknown" (default to removing unknown tokens)
+    - "remove unknown tokens" -> isTokenCleanup = true, cleanupTarget = "unknown"
+    - "cleanup ADI tokens" -> isTokenCleanup = true, cleanupTarget = ["ADI"]
+    - "remove NIX tokens" -> isTokenCleanup = true, cleanupTarget = ["NIX"]
+    - "delete SOL tokens" -> isTokenCleanup = true, cleanupTarget = ["SOL"]
+
+
     For example:
-  - "Check my balance on devnet" -> network = "devnet" , isBalanceCheck = true
+    - "Check my balance on devnet" -> network = "devnet" , isBalanceCheck = true
     - "Send 10 SOL to FwPnvvnMK2RVmZjaBwCZ6wgiNuAFkz4k1qvT36fkHojS" -> isPayment = true
     - "Mint 500 USDC" -> isMintRequest = true, amount = 500, token = "USDC"
     - "What's my SOL balance on localnet?" -> network = "localnet"
@@ -209,6 +288,8 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isBalanceCheck": true/false,
       "isCompleteBalanceCheck": true/false,
       "isMintRequest": true/false,
+      "isTokenCleanup": true/false,
+      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"],
       "amount": number or null,
       "token": "SOL" or other token name, or null,
       "network": "localnet" or "devnet" or "mainnet",
@@ -389,6 +470,29 @@ function parseWithRegex(message: string): PaymentInstruction {
       token,
       recipient,
       confidence: 0.5 // Lower confidence for partial matches
+    };
+  }
+  if (lowerMessage.includes("cleanup") || lowerMessage.includes("remove")) {
+    // Default to unknown if no specific token is mentioned
+    let cleanupTarget: "unknown" | string[] = "unknown";
+    
+    // Look for supported token symbols in the message
+    const knownTokens = ["sol", "usdc", "adi", "nix", "bonk"];
+    for (const token of knownTokens) {
+      if (lowerMessage.includes(token)) {
+        cleanupTarget = [token.toUpperCase()];
+        break;
+      }
+    }
+    
+    return {
+      isPayment: false,
+      isBalanceCheck: false,
+      isMintRequest: false,
+      isTokenCleanup: true,
+      cleanupTarget,
+      network,
+      confidence: 0.9
     };
   }
   
