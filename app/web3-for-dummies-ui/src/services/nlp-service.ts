@@ -174,6 +174,48 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
   network: 'localnet', 
   confidence: 1.0,
 },
+'fix token names': {
+    isPayment: false,
+    isFixTokenNames: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'fix tokens name': {  // Add this variation
+    isPayment: false,
+    isFixTokenNames: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'fix tokens': {  // Add this shorter variation
+    isPayment: false,
+    isFixTokenNames: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'delete all tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isTokenCleanup: true,
+    cleanupTarget: "all",
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'clean all tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isTokenCleanup: true,
+    cleanupTarget: "all",
+    network: 'localnet', 
+    confidence: 1.0,
+  },
+  'remove all tokens': {
+    isPayment: false,
+    isBalanceCheck: false,
+    isTokenCleanup: true,
+    cleanupTarget: "all",
+    network: 'localnet',
+    confidence: 1.0,
+  }
 };
 
 export interface PaymentInstruction {
@@ -181,15 +223,19 @@ export interface PaymentInstruction {
   isBalanceCheck?: boolean;
   isCompleteBalanceCheck?: boolean;
   isMintRequest?: boolean;
-  isTokenCleanup?: boolean;  // Add this new property
-  cleanupTarget?: "unknown" | string[];
+  isTokenCleanup?: boolean;
+  cleanupTarget?: "unknown"| "all" | string[];
   burnTokens?: boolean;
   burnSpecificAmount?: boolean;
   burnAmount?: number;
+  burnByMintAddress?: boolean;
+  mintAddress?: string;
+  listAllTokens?: boolean;
+  isFixTokenNames? : boolean;
   token?: string;
   amount?: number;
   recipient?: string;
-  network? : "localnet" | "devnet" | "mainnet";
+  network?: "localnet" | "devnet" | "mainnet";
   confidence: number;
   raw?: any;
 }
@@ -267,6 +313,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     2. A balance check request.
     3. A token minting request (new feature)
     4. A token cleanup request (new feature)
+    5. A token burning request (including burning by mint address)
 
     IMPORTANT FOR MINT REQUESTS: Always extract the exact number specified in the command.
     - "mint 10 nix" should return amount = 10, not 100
@@ -280,10 +327,14 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     2. Is this a balance check request? (true/false)
     3. Is this a complete balance check request without specific token? (true/false)
     4. Is this a token minting request? (true/false)
-    5. Amount to be sent or minted (number) - for payments or minting
-    6. Cryptocurrency token (e.g., SOL, USDC)
-    7. Recipient address - for payments only
-    8. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    5. Is this a token cleanup request? (true/false)
+    6. Is this a request to list all tokens including unknown ones? (true/false)
+    7. Is this a request to burn tokens by mint address? (true/false)
+    8. Amount to be sent or minted (number) - for payments or minting
+    9. Cryptocurrency token (e.g., SOL, USDC)
+    10. Recipient address - for payments only
+    11. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
+    12. Mint address - for burning unknown tokens
 
 
     For balance check requests:
@@ -296,18 +347,32 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - "mint 5 ADI" -> amount = 5, token = "ADI"
     - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
 
-    For token cleanup requests:
+   For token cleanup requests:
     - "cleanup tokens" -> isTokenCleanup = true, cleanupTarget = "unknown" (default to removing unknown tokens)
     - "remove unknown tokens" -> isTokenCleanup = true, cleanupTarget = "unknown"
     - "cleanup ADI tokens" -> isTokenCleanup = true, cleanupTarget = ["ADI"]
-    - "remove NIX tokens" -> isTokenCleanup = true, cleanupTarget = ["NIX"]
-    - "delete SOL tokens" -> isTokenCleanup = true, cleanupTarget = ["SOL"]
+    - "delete all tokens" -> isTokenCleanup = true, cleanupTarget = "all" (removes all tokens except SOL)
+    - "clean all tokens" -> isTokenCleanup = true, cleanupTarget = "all"
+    - "remove all tokens" -> isTokenCleanup = true, cleanupTarget = "all"
+  
 
     For token-specific burning:
     - "burn 20 NIX" -> burnSpecificAmount = true, burnAmount = 20, token = "NIX"
     - "burn 5.5 ADI" -> burnSpecificAmount = true, burnAmount = 5.5, token = "ADI"
     - "burn 100 USDC" -> burnSpecificAmount = true, burnAmount = 100, token = "USDC"
 
+    For listing all tokens including unknown ones:
+    - "list all tokens" -> listAllTokens = true
+    - "show all tokens including unknown" -> listAllTokens = true
+    - "show my tokens including unknown ones" -> listAllTokens = true
+
+    For burning tokens by mint address:
+    - "burn 10 from mint 5hAykmD4YGcQ7hfa3xNGEQ6EEAyCYgxWKgykD9ksZHit" -> burnByMintAddress = true, amount = 10, mintAddress = "5hAykmD4YGcQ7hfa3xNGEQ6EEAyCYgxWKgykD9ksZHit"
+    - "burn 5.5 tokens from mint address ARV6QncqipgYiLW8dF3P5BYKpUebqWN5KJLnG6Rf5ycW" -> burnByMintAddress = true, amount = 5.5, mintAddress = "ARV6QncqipgYiLW8dF3P5BYKpUebqWN5KJLnG6Rf5ycW"
+    - "burn 10 from mint 7rDjtHGH" -> burnByMintAddress = true, amount = 10, mintAddress = "7rDjtHGH"
+
+    Important: Extract the complete mint address as provided, without adding or removing any characters. 
+    If the user provides a partial mint address, use exactly what they provided.
 
 
     For example:
@@ -331,6 +396,9 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isTokenCleanup": true/false,
       "burnSpecificAmount": true/false,
       "burnAmount": number or null,
+      "burnByMintAddress": true/false,
+      "mintAddress": "address" or null,
+      "listAllTokens": true/false,
       "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"],
       "amount": number or null,
       "token": "SOL" or other token name, or null,
@@ -360,14 +428,19 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isBalanceCheck: !!parsedResult.isBalanceCheck,
       isCompleteBalanceCheck: !!parsedResult.isCompleteBalanceCheck,
       isMintRequest: !!parsedResult.isMintRequest,
-      burnSpecificAmount: !!parsedResult.burnSpecificAmount, // Add this line
-    burnAmount: parsedResult.burnAmount || undefined,      // Add this line
-    cleanupTarget: parsedResult.cleanupTarget, 
+      isTokenCleanup: !!parsedResult.isTokenCleanup,
+      burnSpecificAmount: !!parsedResult.burnSpecificAmount,
+      burnAmount: parsedResult.burnAmount || undefined,
+      burnByMintAddress: !!parsedResult.burnByMintAddress,
+      mintAddress: parsedResult.mintAddress || undefined,
+      listAllTokens: !!parsedResult.listAllTokens,
+      cleanupTarget: parsedResult.cleanupTarget,
+      burnTokens: parsedResult.burnTokens,
       amount: parsedResult.amount !== null && parsedResult.amount !== undefined 
-    ? (typeof parsedResult.amount === 'number' 
-      ? parsedResult.amount 
-      : parseFloat(String(parsedResult.amount)))
-    : parsedResult.isMintRequest && !parsedResult.amount ? 100 : undefined,
+        ? (typeof parsedResult.amount === 'number' 
+          ? parsedResult.amount 
+          : parseFloat(String(parsedResult.amount)))
+        : parsedResult.isMintRequest && !parsedResult.amount ? 100 : undefined,
       token: parsedResult.token || "SOL", // Default to SOL for localnet
       recipient: parsedResult.recipient || undefined,
       network: parsedResult.network || "localnet",

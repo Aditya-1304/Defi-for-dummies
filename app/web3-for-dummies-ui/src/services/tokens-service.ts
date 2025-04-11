@@ -24,7 +24,8 @@ function saveTokenMappingToLocalStorage(network: string, mintAddress: string, to
   if (typeof window === 'undefined') return;
   
   try {
-    const storageKey = `token-mapping-${network}`;
+    // Change to plural to match saveTokenMappingsToLocalStorage
+    const storageKey = `token-mappings-${network}`;
     const existing = localStorage.getItem(storageKey);
     const mappings = existing ? JSON.parse(existing) : {};
     
@@ -35,7 +36,6 @@ function saveTokenMappingToLocalStorage(network: string, mintAddress: string, to
     console.error("Failed to save token mapping to localStorage:", err);
   }
 }
-
 function getTokenMappingsFromLocalStorage(network: string): Record<string, {
   symbol: string;
   decimals: number;
@@ -43,7 +43,8 @@ function getTokenMappingsFromLocalStorage(network: string): Record<string, {
   if (typeof window === 'undefined') return {};
   
   try {
-    const storageKey = `token-mapping-${network}`;
+    // Change this line to match the plural form used in saveTokenMappingsToLocalStorage
+    const storageKey = `token-mappings-${network}`;
     const existing = localStorage.getItem(storageKey);
     return existing ? JSON.parse(existing) : {};
   } catch (err) {
@@ -626,7 +627,8 @@ async function getMinInfo(connection: Connection, mintAddress: PublicKey) {
 export async function fetchUserTokens(
   connection: Connection,
   walletAddress: PublicKey,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  options: { hideUnknown?: boolean } = { hideUnknown: true }
 ): Promise<{
   mint: string;
   balance: number;
@@ -647,9 +649,14 @@ export async function fetchUserTokens(
       { programId: TOKEN_PROGRAM_ID }
     );
 
-    
-    
     console.log(`Found ${tokenAccounts.value.length} token accounts`);
+    
+    // 1. First check mappings in localStorage (has priority)
+    const mappingsKey = `token-mappings-${network}`;
+    const mappingsJson = localStorage.getItem(mappingsKey);
+    console.log(`Checking localStorage for token mappings with key: ${mappingsKey}`);
+    const storedMappings = mappingsJson ? JSON.parse(mappingsJson) : {};
+    console.log(`Found ${Object.keys(storedMappings).length} token mappings in localStorage`);
     
     // Process token accounts
     const tokens = tokenAccounts.value
@@ -662,39 +669,36 @@ export async function fetchUserTokens(
           // Skip tokens with zero balance
           if (balance === 0) return null;
           
-          // Try to find token symbol
+          // Default symbol and decimals
           let symbol = "Unknown";
-          let tokenInfo = null;
+          let decimals = parsedInfo.tokenAmount.decimals;
           
-          // Check in token cache first
-          if (tokenCache[network]) {
+          // 1. Check localStorage mappings first (highest priority)
+          if (storedMappings[mintAddress]) {
+            symbol = storedMappings[mintAddress].symbol;
+            decimals = storedMappings[mintAddress].decimals || decimals;
+            console.log(`Found token in localStorage: ${mintAddress} (${symbol})`);
+          }
+          // 2. Then check tokenCache if still unknown
+          else if (symbol === "Unknown" && tokenCache[network]) {
             for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
               if (info.mint?.toString() === mintAddress) {
                 symbol = cachedSymbol;
-                tokenInfo = info;
                 break;
               }
             }
           }
           
-          
-          // Check in known tokens
-          if (symbol === "Unknown" && KNOWN_TOKENS[network]) {
-            for (const [knownSymbol, knownAddress] of Object.entries(KNOWN_TOKENS[network])) {
-              if (knownAddress === mintAddress) {
-                symbol = knownSymbol;
-                break;
-              }
-            }
+          // If this is an unknown token and we want to hide them, skip it
+          if (symbol === "Unknown" && options.hideUnknown) {
+            return null;
           }
-          
-          console.log(`Found token: ${mintAddress} (${symbol}) with ${balance} balance`);
           
           return {
             mint: mintAddress,
             balance,
             symbol,
-            decimals: parsedInfo.tokenAmount.decimals
+            decimals
           };
         } catch (err) {
           console.error("Error processing token account:", err);
@@ -725,6 +729,8 @@ export async function fetchUserTokens(
     return [];
   }
 }
+
+
 
 /**
  * Cleanup unwanted tokens and recover SOL from account rent
@@ -1031,12 +1037,15 @@ export async function fetchUserTokens(
 /**
  * Cleanup unwanted tokens and recover SOL from account rent
  */
+/**
+ * Cleanup unwanted tokens and recover SOL from account rent
+ */
 export async function cleanupUnwantedTokens(
   connection: Connection,
   wallet: any,
-  tokensToRemove: string[] | "unknown",
+  tokensToRemove: "unknown" | "all" | string[],
   network: "localnet" | "devnet" | "mainnet",
-  burnFirst: boolean = false
+  burnFirst: boolean = true
 ): Promise<{
   success: boolean;
   message: string;
@@ -1044,7 +1053,7 @@ export async function cleanupUnwantedTokens(
   recoveredSOL?: number;
   burnedTokens?: {[symbol: string]: number};
 }> {
-  if (!wallet.publicKey) {
+  if (!wallet?.publicKey) {
     return {
       success: false,
       message: "Wallet not connected"
@@ -1052,8 +1061,7 @@ export async function cleanupUnwantedTokens(
   }
 
   try {
-    console.log(`🧹 Cleaning up tokens on ${network}...`);
-    console.log(`Options: tokensToRemove=${typeof tokensToRemove === 'string' ? tokensToRemove : tokensToRemove.join(',')}, burnFirst=${burnFirst}`);
+    console.log(`🧹 Cleaning up tokens (${tokensToRemove}) on ${network}...`);
     
     // Get all token accounts owned by the wallet
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
@@ -1061,254 +1069,231 @@ export async function cleanupUnwantedTokens(
       { programId: TOKEN_PROGRAM_ID }
     );
     
-    console.log(`Found ${tokenAccounts.value.length} token accounts`);
+    console.log(`Found ${tokenAccounts.value.length} total token accounts`);
     
-    // Step 1: Process all token accounts and gather info
-    const processedAccounts = tokenAccounts.value.map(account => {
-      const parsedInfo = account.account.data.parsed.info;
-      const mintAddress = parsedInfo.mint;
-      const balance = parsedInfo.tokenAmount.uiAmount || 0;
-      const decimals = parsedInfo.tokenAmount.decimals || 0;
-      const rawAmount = parsedInfo.tokenAmount.amount;
-      
-      // Get the token symbol by checking known sources
-      let symbol = "Unknown";
-      
-      // Check localStorage mappings first
-      const persistedMappings = getTokenMappingsFromLocalStorage(network);
-      for (const [knownMint, tokenInfo] of Object.entries(persistedMappings)) {
-        if (knownMint === mintAddress) {
-          symbol = tokenInfo.symbol;
-          break;
-        }
-      }
-      
-      // Check in-memory cache if not found
-      if (symbol === "Unknown" && tokenCache[network]) {
-        for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
-          if (info.mint.toString() === mintAddress) {
-            symbol = cachedSymbol;
-            break;
+    // Process account data for easier handling
+    const processedAccounts = tokenAccounts.value
+      .map(account => {
+        try {
+          const parsedInfo = account.account.data.parsed.info;
+          const mintAddress = parsedInfo.mint;
+          const balance = parsedInfo.tokenAmount.uiAmount || 0;
+          const decimals = parsedInfo.tokenAmount.decimals || 0;
+          const rawAmount = parsedInfo.tokenAmount.amount;
+          
+          // Get token symbol
+          let symbol = "Unknown";
+          
+          // Check localStorage mappings first
+          const persistedMappings = getTokenMappingsFromLocalStorage(network);
+          if (persistedMappings[mintAddress]) {
+            symbol = persistedMappings[mintAddress].symbol;
           }
+          // Check token cache if still unknown
+          else if (tokenCache[network]) {
+            for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
+              if (info.mint?.toString() === mintAddress) {
+                symbol = cachedSymbol;
+                break;
+              }
+            }
+          }
+          
+          console.log(`Found token account: ${mintAddress} (${symbol}) with balance ${balance}`);
+          
+          return {
+            pubkey: account.pubkey,
+            mint: mintAddress,
+            symbol,
+            balance,
+            decimals,
+            rawAmount,
+            isKnown: symbol !== "Unknown"
+          };
+        } catch (error) {
+          console.error("Error processing token account:", error);
+          return null;
         }
-      }
-      
-      return {
-        pubkey: account.pubkey,
-        mint: mintAddress,
-        symbol,
-        balance,
-        decimals,
-        rawAmount,
-        isKnown: symbol !== "Unknown"
-      };
-    });
+      })
+      .filter(account => account !== null);
     
-    // Step 2: Filter accounts based on criteria
-    let accountsToProcess = processedAccounts.filter(account => {
-      // For "unknown", keep only unknown tokens
-      if (tokensToRemove === "unknown") {
-        return !account.isKnown;
-      }
-      // For specific tokens, match the symbols
-      else if (Array.isArray(tokensToRemove)) {
-        return tokensToRemove.some(
-          target => target.toUpperCase() === account.symbol.toUpperCase()
-        );
-      }
-      return false;
-    });
+    // Filter accounts to process based on criteria
+    interface ProcessedTokenAccount {
+      pubkey: web3.PublicKey;
+      mint: string;
+      symbol: string;
+      balance: number;
+      decimals: number;
+      rawAmount: string;
+      isKnown: boolean;
+    }
     
-    console.log(`Found ${accountsToProcess.length} token accounts matching removal criteria`);
+    let accountsToProcess: ProcessedTokenAccount[] = [];
+    
+    if (tokensToRemove === "all") {
+      // Process ALL token accounts except native SOL
+      accountsToProcess = processedAccounts.filter(account => 
+        account.mint !== "So11111111111111111111111111111111111111112" && 
+        account.mint !== "SOL"
+      );
+      console.log(`Processing ALL tokens: selected ${accountsToProcess.length} accounts`);
+    } 
+    else if (tokensToRemove === "unknown") {
+      // Process only unknown tokens
+      accountsToProcess = processedAccounts.filter(account => !account.isKnown);
+      console.log(`Processing UNKNOWN tokens: selected ${accountsToProcess.length} accounts`);
+    } 
+    else if (Array.isArray(tokensToRemove)) {
+      // Process specific token symbols
+      accountsToProcess = processedAccounts.filter(account => 
+        tokensToRemove.some(symbol => 
+          symbol.toUpperCase() === account.symbol.toUpperCase()
+        )
+      );
+      console.log(`Processing specific tokens (${tokensToRemove.join(', ')}): selected ${accountsToProcess.length} accounts`);
+    }
     
     if (accountsToProcess.length === 0) {
       return {
         success: true,
-        message: "No eligible token accounts found to clean up",
-        removedTokens: 0,
-        recoveredSOL: 0
+        message: "No eligible tokens found to clean up",
+        removedTokens: 0
       };
     }
     
-    // Step 3: Separate accounts by whether they need burning or not
+    // Separate accounts with and without balance
     const accountsWithBalance = accountsToProcess.filter(account => account.balance > 0);
     const accountsWithoutBalance = accountsToProcess.filter(account => account.balance === 0);
     
-    console.log(`- ${accountsWithBalance.length} accounts with balance`);
-    console.log(`- ${accountsWithoutBalance.length} accounts with zero balance`);
+    console.log(`Found ${accountsWithBalance.length} accounts with balance to burn`);
+    console.log(`Found ${accountsWithoutBalance.length} empty accounts to close`);
     
-    // Track which tokens were burned
+    // Track burned tokens
     const burnedTokens: {[symbol: string]: number} = {};
     
-    // Step 4: If burnFirst is true, burn tokens with balance
+    // STEP 1: If requested, burn tokens with balance
     if (burnFirst && accountsWithBalance.length > 0) {
       console.log(`Burning tokens for ${accountsWithBalance.length} accounts...`);
       
-      // Process each token individually for highest success rate
+      // Process each account individually for better error handling
       for (const account of accountsWithBalance) {
-        console.log(`Processing burn for ${account.balance} ${account.symbol}...`);
-        
-        let success = false;
-        let attempts = 0;
-        const maxAttempts = 5; // More attempts for individual transactions
-        
-        while (!success && attempts < maxAttempts) {
-          attempts++;
+        try {
+          console.log(`Burning ${account.balance} ${account.symbol}...`);
           
-          try {
-            // Create a new transaction for each attempt
-            const burnTransaction = new Transaction();
-            
-            // Add burn instruction
-            console.log(`Creating burn instruction for ${account.balance} ${account.symbol} (${account.mint})`);
-            burnTransaction.add(
-              createBurnInstruction(
-                account.pubkey,
-                new PublicKey(account.mint),
-                wallet.publicKey,
-                BigInt(account.rawAmount),
-                []
-              )
-            );
-            
-            // Track for reporting
-            if (!burnedTokens[account.symbol]) {
-              burnedTokens[account.symbol] = 0;
-            }
-            burnedTokens[account.symbol] += account.balance;
-            
-            // Get fresh blockhash for this attempt
-            const { blockhash } = await connection.getLatestBlockhash();
-            burnTransaction.recentBlockhash = blockhash;
-            burnTransaction.feePayer = wallet.publicKey;
-            
-            console.log(`Sending burn transaction for ${account.symbol} (attempt ${attempts})...`);
-            
-            // Sign and send using the same pattern as your mintMoreTokens function
-            const signedTx = await wallet.signTransaction(burnTransaction);
-            const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-              skipPreflight: true // Skip preflight checks to avoid some errors
-            });
-            
-            console.log(`Transaction sent with signature ${signature}`);
-            
-            // Wait for confirmation - using simple await like in mintMoreTokens
-            await connection.confirmTransaction(signature);
-            
-            console.log(`Burn transaction confirmed for ${account.symbol}!`);
-            success = true;
-            
-            // Wait a moment between tokens
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } catch (error) {
-            console.error(`Error burning ${account.symbol} (attempt ${attempts}):`, error);
-            
-            if (attempts >= maxAttempts) {
-              throw new Error(`Failed to burn ${account.symbol} tokens after ${maxAttempts} attempts`);
-            }
-            
-            // Wait longer between retries - exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, attempts), 8000);
-            console.log(`Will retry in ${delay/1000} seconds...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+          // Create burn transaction
+          const burnTx = new Transaction();
+          burnTx.add(
+            createBurnInstruction(
+              account.pubkey,
+              new PublicKey(account.mint),
+              wallet.publicKey,
+              BigInt(account.rawAmount),
+              []
+            )
+          );
+          
+          // Send and confirm transaction
+          const { blockhash } = await connection.getLatestBlockhash();
+          burnTx.recentBlockhash = blockhash;
+          burnTx.feePayer = wallet.publicKey;
+          
+          const signedTx = await wallet.signTransaction(burnTx);
+          const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: true
+          });
+          
+          await connection.confirmTransaction(signature, 'confirmed');
+          
+          // Record burned token
+          if (!burnedTokens[account.symbol]) {
+            burnedTokens[account.symbol] = 0;
           }
+          burnedTokens[account.symbol] += account.balance;
+          
+          console.log(`✅ Burned ${account.balance} ${account.symbol}`);
+          
+          // Give a short pause between transactions
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error(`Failed to burn ${account.symbol}:`, error);
         }
       }
-      
-      console.log(`All tokens burned successfully!`);
-      
-      // Wait after all burns are complete
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    // Step 5: Close accounts that have zero balance (or have been burned)
-    const accountsToClose = burnFirst 
-      ? [...accountsWithoutBalance, ...accountsWithBalance] // If we burned, we can close all of them
-      : accountsWithoutBalance;                           // Otherwise, only close empty ones
+    // STEP 2: Close accounts
+    const accountsToClose = burnFirst
+      ? [...accountsWithoutBalance, ...accountsWithBalance] // If we've burned tokens, try to close all accounts
+      : accountsWithoutBalance;                            // Otherwise, only close empty accounts
     
-      if (accountsToClose.length === 0) {
-        let message = "";
-        if (Object.keys(burnedTokens).length > 0) {
-          // If we burned tokens but have none to close, still show success message
-          const burnedList = Object.entries(burnedTokens)
-            .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
-            .join(", ");
-          message = `✅ Successfully burned: ${burnedList}`;
-        } else {
-          message = "No eligible token accounts found to clean up";
-        }
-        
-        return {
-          success: true,
-          message,
-          removedTokens: 0,
-          recoveredSOL: 0,
-          burnedTokens
-        };
-      }
+    if (accountsToClose.length === 0) {
+      const burnedList = Object.entries(burnedTokens)
+        .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
+        .join(", ");
+      
+      return {
+        success: true,
+        message: `Successfully burned: ${burnedList}`,
+        removedTokens: 0,
+        burnedTokens
+      };
+    }
     
     console.log(`Closing ${accountsToClose.length} token accounts...`);
     
-    // Group close operations into batches of 8
-    const closeBatches = [];
-    for (let i = 0; i < accountsToClose.length; i += 8) {
-      closeBatches.push(accountsToClose.slice(i, i + 8));
-    }
-    
+    // Close accounts in smaller batches to avoid transaction size limits
+    const BATCH_SIZE = 5;
     let closedCount = 0;
     
-    for (let i = 0; i < closeBatches.length; i++) {
-      const batch = closeBatches[i];
-      console.log(`Processing close batch ${i+1}/${closeBatches.length} with ${batch.length} accounts`);
-      
-      const closeTransaction = new Transaction();
-      
-      for (const account of batch) {
-        console.log(`- Adding close instruction for ${account.symbol} account`);
-        
-        closeTransaction.add(
-          createCloseAccountInstruction(
-            account.pubkey,       // Token account
-            wallet.publicKey,     // Destination (rent goes here)
-            wallet.publicKey,     // Owner
-            []                    // Multisignature (no additional signers)
-          )
-        );
-      }
+    for (let i = 0; i < accountsToClose.length; i += BATCH_SIZE) {
+      const batch = accountsToClose.slice(i, i + BATCH_SIZE);
+      console.log(`Processing close batch ${i/BATCH_SIZE + 1}/${Math.ceil(accountsToClose.length/BATCH_SIZE)}`);
       
       try {
-        // Get fresh blockhash
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-        closeTransaction.recentBlockhash = blockhash;
-        closeTransaction.feePayer = wallet.publicKey;
+        const closeTx = new Transaction();
         
-        console.log(`Sending close transaction...`);
-        const closeSignature = await wallet.sendTransaction(closeTransaction, connection);
-        console.log(`Transaction sent with signature ${closeSignature}`);
+        // Add close instruction for each account in batch
+        batch.forEach(account => {
+          closeTx.add(
+            createCloseAccountInstruction(
+              account.pubkey,
+              wallet.publicKey,
+              wallet.publicKey,
+              []
+            )
+          );
+        });
         
-        await connection.confirmTransaction({
-          signature: closeSignature,
-          blockhash,
-          lastValidBlockHeight
-        }, 'confirmed');
+        // Sign and send transaction
+        const { blockhash } = await connection.getLatestBlockhash();
+        closeTx.recentBlockhash = blockhash;
+        closeTx.feePayer = wallet.publicKey;
         
-        console.log(`Close transaction confirmed!`);
+        const signature = await wallet.sendTransaction(closeTx, connection);
+        await connection.confirmTransaction(signature, 'confirmed');
+        
         closedCount += batch.length;
+        console.log(`✅ Closed ${batch.length} accounts`);
+        
+        // Pause between batches
+        if (i + BATCH_SIZE < accountsToClose.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       } catch (error) {
-        console.error(`Error in close transaction:`, error);
-        // Don't throw here, so we can report on the accounts we did manage to close
+        console.error(`Failed to close batch:`, error);
       }
     }
     
-    // Calculate recovered SOL (approx. 0.00203928 SOL per token account)
+    // Calculate recovered SOL (approximate)
     const estimatedRecoveredSOL = closedCount * 0.00203928;
     
-    // Create report message
+    // Create result message
     let message = "";
+    
     if (Object.keys(burnedTokens).length > 0) {
       const burnedList = Object.entries(burnedTokens)
         .map(([symbol, amount]) => `${amount.toFixed(2)} ${symbol}`)
         .join(", ");
+      
       message += `Burned: ${burnedList}\n`;
     }
     
@@ -1542,5 +1527,153 @@ export async function burnSpecificTokenAmount(
       success: false,
       message: `Failed to burn tokens: ${error.message}`
     };
+  }
+}
+
+export async function burnTokensByMintAddress(
+  connection: Connection,
+  wallet: any,
+  mintAddress: string,
+  amount: number,
+  network: "localnet" | "devnet" | "mainnet",
+  closeAccountIfEmpty: boolean = true
+): Promise<{
+  success: boolean;
+  message: string;
+  signature?: string;
+}> {
+  if (!wallet.publicKey) {
+    return {
+      success: false,
+      message: "Wallet not connected"
+    };
+  }
+
+  try {
+    console.log(`🔥 Burning ${amount} tokens from mint ${mintAddress} on ${network}...`);
+    
+    // Convert the mint address string to PublicKey
+    const mintPubkey = new PublicKey(mintAddress);
+    
+    // Find the user's token account for this mint
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      wallet.publicKey,
+      { mint: mintPubkey }
+    );
+    
+    if (tokenAccounts.value.length === 0) {
+      return {
+        success: false,
+        message: `No token account found for mint ${mintAddress.slice(0, 8)}...`
+      };
+    }
+    
+    // Use the first token account found
+    const tokenAccount = tokenAccounts.value[0];
+    const parsedInfo = tokenAccount.account.data.parsed.info;
+    const balance = parsedInfo.tokenAmount.uiAmount || 0;
+    const decimals = parsedInfo.tokenAmount.decimals || 0;
+    
+    console.log(`Found token account with balance: ${balance}`);
+    
+    if (balance < amount) {
+      return {
+        success: false,
+        message: `Insufficient balance: you have ${balance} tokens, but tried to burn ${amount}`
+      };
+    }
+    
+    // Calculate raw amount to burn
+    const rawBurnAmount = BigInt(Math.floor(amount * Math.pow(10, decimals)));
+    const willBeEmpty = balance <= amount;
+    
+    // Create burn transaction
+    const burnTransaction = new Transaction();
+    
+    burnTransaction.add(
+      createBurnInstruction(
+        tokenAccount.pubkey,
+        mintPubkey,
+        wallet.publicKey,
+        rawBurnAmount,
+        []
+      )
+    );
+    
+    // Add close instruction if needed
+    if (willBeEmpty && closeAccountIfEmpty) {
+      console.log("Account will be empty after burn, adding close instruction");
+      burnTransaction.add(
+        createCloseAccountInstruction(
+          tokenAccount.pubkey,
+          wallet.publicKey,
+          wallet.publicKey,
+          []
+        )
+      );
+    }
+    
+    // Get fresh blockhash
+    const { blockhash } = await connection.getLatestBlockhash();
+    burnTransaction.recentBlockhash = blockhash;
+    burnTransaction.feePayer = wallet.publicKey;
+    
+    console.log(`Sending burn transaction...`);
+    
+    // Sign and send transaction
+    const signedTx = await wallet.signTransaction(burnTransaction);
+    const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+      skipPreflight: true
+    });
+    
+    console.log(`Transaction sent with signature ${signature}`);
+    
+    // Wait for confirmation
+    await connection.confirmTransaction(signature, 'confirmed');
+    
+    console.log(`Successfully burned ${amount} tokens from mint ${mintAddress.slice(0, 8)}...`);
+    
+    // Create appropriate message based on whether we closed the account
+    const message = willBeEmpty && closeAccountIfEmpty
+      ? `Successfully burned all tokens and closed the account for mint ${mintAddress.slice(0, 8)}...`
+      : `Successfully burned ${amount} tokens from mint ${mintAddress.slice(0, 8)}...`;
+    
+    return {
+      success: true,
+      message,
+      signature
+    };
+  } catch (error: any) {
+    console.error(`Error burning tokens by mint address:`, error);
+    return {
+      success: false,
+      message: `Failed to burn tokens: ${error.message}`
+    };
+  }
+}
+
+export function saveTokenMappingsToLocalStorage(
+  tokenSymbol: string, 
+  mintAddress: string, 
+  network: string, 
+  decimals: number = 6
+): void {
+  try {
+    // Get existing mappings
+    const mappingsKey = `token-mappings-${network}`;
+    const mappingsJson = localStorage.getItem(mappingsKey);
+    const mappings = mappingsJson ? JSON.parse(mappingsJson) : {};
+    
+    // Add new mapping
+    mappings[mintAddress] = { 
+      symbol: tokenSymbol, 
+      decimals 
+    };
+    
+    // Store updated mappings
+    localStorage.setItem(mappingsKey, JSON.stringify(mappings));
+    console.log(`Saved token mapping for ${network}: ${tokenSymbol} (${mintAddress})`);
+  } catch (error) {
+    console.error("Failed to save token mapping:", error);
   }
 }

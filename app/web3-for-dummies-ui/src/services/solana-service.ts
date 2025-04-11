@@ -36,7 +36,7 @@ function setTokenInCache(symbol: string, tokenInfo: {mint: PublicKey, decimals: 
 }
 
 // Local function to persist token mappings to localStorage
-function saveTokenMappingsToLocalStorage(mappings: any, network: string): void {
+function saveTokenMappingsToLocalStorage(mappings: any, network: string, ): void {
   try {
     const storageKey = `token-mapping-${network}`;
     localStorage.setItem(storageKey, JSON.stringify(mappings));
@@ -637,7 +637,7 @@ export async function getWalletBalance(
     }
     
     // For other tokens, use the on-chain fetching approach
-    const tokens = await fetchUserTokens(connection, wallet, network);
+    const tokens = await fetchUserTokens(connection, wallet.publicKey, network,{ hideUnknown: false });
     const targetToken = tokens.find(t => t.symbol.toUpperCase() === tokenUpperCase);
     
     if (!targetToken) {
@@ -746,6 +746,15 @@ export async function mintTestTokens(
             );
             
             await consolidateTokenMappings(network, tokenSymbol, tokenInfo.mint);
+
+            // Create mapping object in the expected format
+            const tokenMapping = {
+              [tokenInfo.mint.toString()]: {
+                symbol: tokenSymbol,
+                decimals: tokenInfo.decimals
+              }
+            };
+            await saveTokenMappingsToLocalStorage(tokenMapping, network);
 
             return {
               success: true,
@@ -1246,7 +1255,7 @@ export async function getAllWalletBalances(
     }
     
     // Use the new function to get all tokens directly from blockchain
-    const tokens = await fetchUserTokens(connection, wallet, network, {hideUnknown: true});
+    const tokens = await fetchUserTokens(connection, wallet.publicKey, network,{ hideUnknown: false });
     
     if (tokens.length === 0) {
       return {
