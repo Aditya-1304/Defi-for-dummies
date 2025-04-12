@@ -1,10 +1,9 @@
 // src/services/solana-service.ts
 import { PublicKey, Transaction, Connection, Keypair, SystemProgram } from '@solana/web3.js';
-import { Program, AnchorProvider, web3, BN } from '@coral-xyz/anchor';
+import {  web3,  } from '@coral-xyz/anchor';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction } from '@solana/spl-token';
-import { Web3ForDummies } from '../public/idl/types/web3_for_dummies';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
-import { getOrCreateToken, getTokenBalance, transferToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
+import { getOrCreateToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 
 import * as spl from '@solana/spl-token';
 
@@ -1004,26 +1003,6 @@ export async function mintTestTokens(
           };
         }
         
-        // for (const [mintAddress, tokenInfo] of Object.entries(persistedMappings)) {
-        //   if (tokenInfo.symbol.toUpperCase() === tokenSymbol) {
-        //     console.log(`Found existing token ${tokenSymbol} in localStorage with mint ${mintAddress}`);
-        //     existingTokenMint = new PublicKey(mintAddress);
-            
-        //     // Also restore to in-memory cache
-        //     if (!tokenCache[network]) tokenCache[network] = {};
-        //     tokenCache[network][tokenSymbol] = {
-        //       mint: existingTokenMint,
-        //       decimals: tokenInfo.decimals,
-        //       symbol: tokenSymbol,
-        //     };
-        //     break;
-        //   }
-        // }
-        
-        // Check if we already have created this custom token before
-        // if (tokenCache[network] && tokenCache[network][tokenSymbol]) {
-        //   console.log(`Using existing custom token: ${tokenSymbol}`);
-          
           try {
             // Use the existing token mint from cache
             const TokenMint = tokenCache[network][tokenSymbol].mint;
@@ -1371,139 +1350,6 @@ async function mintMoreCustomTokens(
   }
 }
 
-// export async function getAllWalletBalances(
-//   connection: web3.Connection,
-//   wallet: any,
-//   network: "localnet" | "devnet" | "mainnet" = "localnet",
-//   options: { initialOnly?: boolean} = {}
-// ) {
-//   if (!wallet || !wallet.publicKey) {
-//     return {
-//       success: false,
-//       message: "Please connect your wallet",
-//     };
-//   }
-
-//   try {
-//     if (!wallet.publicKey) throw new Error("Wallet not connected");
-    
-//     console.log(`🌐 Getting all balances on ${network} network`);
-    
-//     if (network === "mainnet") {
-//       return {
-//         success: false,
-//         error: "Mainnet balance checks unavailable",
-//         message: "Mainnet balance checks are unavailable in demo mode. Please use devnet or localnet."
-//       };
-//     }
-    
-//     const networkUrl = NETWORK_URLS[network];
-//     const networkConnection = new Connection(networkUrl, "confirmed");
-    
-    
-//     // Start with SOL balance
-//     const solBalance = await networkConnection.getBalance(wallet.publicKey);
-//     const solBalanceInSOL = solBalance / web3.LAMPORTS_PER_SOL;
-    
-//     const initialBalances = [
-//       {
-//         token: 'SOL',
-//         balance: solBalanceInSOL,
-//         decimals: 9
-//       }
-//     ];
-    
-//     if (options.initialOnly) {
-//       return {
-//         success: true,
-//         balances: initialBalances,
-//         network,
-//         isPartial: true,
-//         message: `Your ${network} wallet has ${solBalanceInSOL.toFixed(7)} SOL`
-//       };
-//     }
-    
-//     const tokenAddresses = [];
-//     const balances = [...initialBalances];
-
-//     // Get balances for all cached tokens in this network
-//     const tokenSymbols = Object.keys(tokenCache[network] || {});
-    
-//     for (const symbol of tokenSymbols) {
-//       const tokenInfo = tokenCache[network][symbol];
-//       try {
-//         const tokenAddress = await getAssociatedTokenAddress(
-//           tokenInfo.mint,
-//           wallet.publicKey
-//         );
-//         tokenAddresses.push(tokenAddress);
-//       } catch (error) {
-//         console.warn(`Error getting address for ${symbol}:`, error);
-//       }
-//     }
-
-//     const tokenInfos = await networkConnection.getMultipleAccountsInfo(tokenAddresses);
-    
-//     for (let i = 0; i < tokenAddresses.length; i++) {
-//       const tokenAddress = tokenAddresses[i];
-//       const accountInfo = tokenInfos[i];
-//       const symbol = tokenSymbols[i];
-      
-//       if (accountInfo) {
-//         try {
-//           // Process the account info directly instead of making another request
-//           const tokenBalance = await networkConnection.getTokenAccountBalance(tokenAddress);
-//           const balance = tokenBalance.value.uiAmount || 0;
-//           const decimals = tokenBalance.value.decimals;
-          
-//           balances.push({
-//             token: symbol,
-//             balance,
-//             decimals
-//           });
-//         } catch (error) {
-//           console.warn(`Failed to parse token ${symbol} from batch request:`, error);
-//         }
-//       } else {
-//         // Account doesn't exist, push zero balance
-//         balances.push({
-//           token: symbol,
-//           balance: 0,
-//           decimals: tokenCache[network][symbol].decimals || 6
-//         });
-//       }
-//     }
-
-//     // Format the message
-//     const tokens = balances.map(b => 
-//       `${b.balance.toFixed(b.token === 'SOL' ? 7 : 2)} ${b.token}`
-//     );
-    
-//     let message;
-//     if (balances.length > 1) {
-//       message = `Your ${network} wallet balances:\n• ${tokens.join('\n• ')}`;
-//     } else if (balances.length === 1) {
-//       message = `Your ${network} wallet has ${tokens[0]}`;
-//     } else {
-//       message = `Your ${network} wallet has no tokens`;
-//     }
-    
-//     return {
-//       success: true,
-//       balances,
-//       network,
-//       message
-//     };
-//   } catch (error: any) {
-//     console.error("Balance check error:", error);
-//     return {
-//       success: false,
-//       error: error.message,
-//       network,
-//       message: `Failed to get balances: ${error.message}`
-//     };
-//   }
-// }
 export async function getAllWalletBalances(
   connection: web3.Connection,
   wallet: any,
@@ -1985,14 +1831,7 @@ async function saveTokenInfo(
   
   console.log(`Saved ${symbol} token info to cache and localStorage`);
 }
-/**
- * Creates a transaction instruction to initialize a new mint
- * @param mint The public key of the mint account to initialize
- * @param decimals Number of decimals for the token
- * @param mintAuthority The account that will have permission to mint tokens
- * @param freezeAuthority The account that will have permission to freeze token accounts
- * @returns The instruction to initialize a mint
- */
+
 function createInitializeMintInstruction(
   mint: PublicKey, 
   decimals: number, 
