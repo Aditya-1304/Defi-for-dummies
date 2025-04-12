@@ -1064,8 +1064,16 @@ export async function cleanupUnwantedTokens(
   try {
     console.log(`🧹 Cleaning up tokens (${tokensToRemove}) on ${network}...`);
     
+    // Create a fresh connection for better reliability
+    const networkConnection = new Connection(
+      network === "devnet" ? "https://api.devnet.solana.com" : 
+      network === "mainnet" ? "https://solana-mainnet.rpc.extrnode.com" : 
+      "http://localhost:8899",
+      { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+    );
+    
     // Get all token accounts owned by the wallet
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+    const tokenAccounts = await networkConnection.getParsedTokenAccountsByOwner(
       wallet.publicKey,
       { programId: TOKEN_PROGRAM_ID }
     );
@@ -1128,7 +1136,7 @@ export async function cleanupUnwantedTokens(
       rawAmount: string;
       isKnown: boolean;
     }
-    
+
     let accountsToProcess: ProcessedTokenAccount[] = [];
     
     if (tokensToRemove === "all") {
@@ -1169,8 +1177,9 @@ export async function cleanupUnwantedTokens(
     console.log(`Found ${accountsWithBalance.length} accounts with balance to burn`);
     console.log(`Found ${accountsWithoutBalance.length} empty accounts to close`);
     
-    // Track burned tokens
+    // Track burned tokens and signatures
     const burnedTokens: {[symbol: string]: number} = {};
+    const signatures: string[] = [];
     
     // STEP 1: If requested, burn tokens with balance
     if (burnFirst && accountsWithBalance.length > 0) {
@@ -1193,17 +1202,20 @@ export async function cleanupUnwantedTokens(
             )
           );
           
-          // Send and confirm transaction
-          const { blockhash } = await connection.getLatestBlockhash();
+          // Get a fresh blockhash
+          const { blockhash } = await networkConnection.getLatestBlockhash('finalized');
           burnTx.recentBlockhash = blockhash;
           burnTx.feePayer = wallet.publicKey;
           
+          // Sign and send transaction
           const signedTx = await wallet.signTransaction(burnTx);
-          const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-            skipPreflight: true
+          const signature = await networkConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed'
           });
           
-          await connection.confirmTransaction(signature, 'confirmed');
+          signatures.push(signature);
+          await networkConnection.confirmTransaction(signature, 'confirmed');
           
           // Record burned token
           if (!burnedTokens[account.symbol]) {
@@ -1235,7 +1247,8 @@ export async function cleanupUnwantedTokens(
         success: true,
         message: `Successfully burned: ${burnedList}`,
         removedTokens: 0,
-        burnedTokens
+        burnedTokens,
+        signatures
       };
     }
     
@@ -1250,6 +1263,7 @@ export async function cleanupUnwantedTokens(
       console.log(`Processing close batch ${i/BATCH_SIZE + 1}/${Math.ceil(accountsToClose.length/BATCH_SIZE)}`);
       
       try {
+        // Create a new transaction for each batch
         const closeTx = new Transaction();
         
         // Add close instruction for each account in batch
@@ -1264,20 +1278,30 @@ export async function cleanupUnwantedTokens(
           );
         });
         
-        // Sign and send transaction
-        const { blockhash } = await connection.getLatestBlockhash();
+        // Get a fresh blockhash for each batch
+        const { blockhash } = await networkConnection.getLatestBlockhash('finalized');
         closeTx.recentBlockhash = blockhash;
         closeTx.feePayer = wallet.publicKey;
         
-        const signature = await wallet.sendTransaction(closeTx, connection);
-        await connection.confirmTransaction(signature, 'confirmed');
+        // Sign transaction first
+        const signedTx = await wallet.signTransaction(closeTx);
+        
+        // Send raw transaction for better reliability
+        console.log(`Sending raw transaction to close accounts...`);
+        const signature = await networkConnection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed'
+        });
+        
+        signatures.push(signature);
+        await networkConnection.confirmTransaction(signature, 'confirmed');
         
         closedCount += batch.length;
         console.log(`✅ Closed ${batch.length} accounts`);
         
         // Pause between batches
         if (i + BATCH_SIZE < accountsToClose.length) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       } catch (error) {
         console.error(`Failed to close batch:`, error);
@@ -1299,10 +1323,6 @@ export async function cleanupUnwantedTokens(
     }
     
     message += `Successfully closed ${closedCount} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`;
-
-    const signatures: string[] = [];
-    const signature = await wallet.sendTransaction(close, connection);
-  signatures.push(signature);
     
     return {
       success: true,
@@ -1310,7 +1330,7 @@ export async function cleanupUnwantedTokens(
       removedTokens: closedCount,
       recoveredSOL: estimatedRecoveredSOL,
       burnedTokens,
-      signatures 
+      signatures
     };
   } catch (error: any) {
     console.error("Error cleaning up tokens:", error);
@@ -1535,6 +1555,7 @@ export async function burnSpecificTokenAmount(
     };
   }
 }
+
 
 export async function burnTokensByMintAddress(
   connection: Connection,

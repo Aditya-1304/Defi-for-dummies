@@ -215,7 +215,35 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     cleanupTarget: "all",
     network: 'localnet',
     confidence: 1.0,
-  }
+  },
+  'list all': {
+  isPayment: false,
+  isBalanceCheck: false,
+  listAllTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'list all tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  listAllTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'show all tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  listAllTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'list tokens': {
+  isPayment: false,
+  isBalanceCheck: false,
+  listAllTokens: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
 };
 
 export interface PaymentInstruction {
