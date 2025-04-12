@@ -51,19 +51,6 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     const currentEndpoint = window.localStorage.getItem('network');
     console.log("Current network in localStorage =", currentEndpoint);
     
-    // if (networkParam === 'devnet') {
-    //   console.log("Setting network to devnet");
-    //   setNetwork('devnet');
-    //   window.localStorage.setItem('network', 'devnet');
-    // } else if (networkParam === 'mainnet') {
-    //   console.log("Setting network to mainnet");
-    //   setNetwork('mainnet');
-    //   window.localStorage.setItem('network', 'mainnet');
-    // } else {
-    //   console.log("Setting network to localnet");
-    //   setNetwork('localnet');
-    //   window.localStorage.setItem('network', 'localnet');
-    // }
   }, []);
 
   // Define endpoints for different networks

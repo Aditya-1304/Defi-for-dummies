@@ -1,7 +1,7 @@
 // src/components/chat/chat-interface.tsx
 "use client"
 
-import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, getWalletBalance, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
