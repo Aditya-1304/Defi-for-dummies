@@ -6,6 +6,8 @@ import {
   createInitializeMintInstruction, createMintToInstruction, createCloseAccountInstruction,
   createBurnInstruction
 } from "@solana/spl-token";
+import { resolveTokenInfo, convertToTokenInfo } from './token-metadat-service';
+
 import * as web3 from '@solana/web3.js';
 
 // Definition for token information
@@ -625,105 +627,97 @@ async function getMinInfo(connection: Connection, mintAddress: PublicKey) {
 }
 
 export async function fetchUserTokens(
-  connection: Connection,
-  walletAddress: PublicKey,
+  connection: web3.Connection,
+  wallet: PublicKey | any,
   network: "localnet" | "devnet" | "mainnet" = "localnet",
-  options: { hideUnknown?: boolean } = { hideUnknown: true }
+  options = { hideUnknown: false }
 ): Promise<{
   mint: string;
   balance: number;
   symbol: string;
   decimals: number;
+  name?: string;
+  logoURI?: string;
 }[]> {
-  if (!connection || !walletAddress) {
+  if (!connection || !wallet.publicKey) {
     console.log("Missing connection or wallet address");
     return [];
   }
   
   try {
-    console.log(`Fetching on-chain tokens for ${walletAddress.toString()} on ${network}...`);
+    console.log(`Fetching on-chain tokens for ${wallet.publicKey.toString()} on ${network}...`);
     
-    // Get all token accounts owned by the user
+    // Get all token accounts owned by the user directly from the blockchain
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-      walletAddress,
+      wallet.publicKey,
       { programId: TOKEN_PROGRAM_ID }
     );
-
+    
     console.log(`Found ${tokenAccounts.value.length} token accounts`);
     
-    // 1. First check mappings in localStorage (has priority)
-    const mappingsKey = `token-mappings-${network}`;
-    const mappingsJson = localStorage.getItem(mappingsKey);
-    console.log(`Checking localStorage for token mappings with key: ${mappingsKey}`);
-    const storedMappings = mappingsJson ? JSON.parse(mappingsJson) : {};
-    console.log(`Found ${Object.keys(storedMappings).length} token mappings in localStorage`);
-    
-    // Process token accounts
-    const tokens = tokenAccounts.value
-      .map(account => {
-        try {
-          const parsedInfo = account.account.data.parsed.info;
-          const mintAddress = parsedInfo.mint;
-          const balance = parsedInfo.tokenAmount.uiAmount;
-          
-          // Skip tokens with zero balance
-          if (balance === 0) return null;
-          
-          // Default symbol and decimals
-          let symbol = "Unknown";
-          let decimals = parsedInfo.tokenAmount.decimals;
-          
-          // 1. Check localStorage mappings first (highest priority)
-          if (storedMappings[mintAddress]) {
-            symbol = storedMappings[mintAddress].symbol;
-            decimals = storedMappings[mintAddress].decimals || decimals;
-            console.log(`Found token in localStorage: ${mintAddress} (${symbol})`);
-          }
-          // 2. Then check tokenCache if still unknown
-          else if (symbol === "Unknown" && tokenCache[network]) {
-            for (const [cachedSymbol, info] of Object.entries(tokenCache[network])) {
-              if (info.mint?.toString() === mintAddress) {
-                symbol = cachedSymbol;
-                break;
-              }
-            }
-          }
-          
-          // If this is an unknown token and we want to hide them, skip it
-          if (symbol === "Unknown" && options.hideUnknown) {
-            return null;
-          }
-          
+    // Process account data and resolve token identities
+    const tokenPromises = tokenAccounts.value.map(async (account) => {
+      try {
+        const parsedInfo = account.account.data.parsed.info;
+        const mintAddress = parsedInfo.mint;
+        const balance = parsedInfo.tokenAmount.uiAmount || 0;
+        const decimals = parsedInfo.tokenAmount.decimals || 0;
+        
+        // Skip tokens with zero balance if desired
+        if (balance === 0) return null;
+        
+        // Resolve token metadata using our new system
+        const metadata = await resolveTokenInfo(connection, mintAddress, network);
+        
+        if (metadata) {
           return {
             mint: mintAddress,
             balance,
-            symbol,
-            decimals
+            symbol: metadata.symbol,
+            decimals: metadata.decimals || decimals,
+            name: metadata.name,
+            logoURI: metadata.logoURI,
+            source: metadata.source
           };
-        } catch (err) {
-          console.error("Error processing token account:", err);
-          return null;
         }
-      })
-      .filter((token): token is { mint: string; balance: number; symbol: string; decimals: number; } => token !== null);
+        
+        // If we can't resolve the token, mark as Unknown
+        return {
+          mint: mintAddress,
+          balance,
+          symbol: "Unknown",
+          decimals,
+          name: "Unknown Token"
+        };
+      } catch (error) {
+        console.error(`Error processing token account:`, error);
+        return null;
+      }
+    });
+    
+    // Wait for all token resolutions
+    const resolvedTokens = (await Promise.all(tokenPromises)).filter(t => t !== null);
     
     // Add native SOL balance
-    try {
-      const solBalance = await connection.getBalance(walletAddress);
-      if (solBalance > 0) {
-        tokens.push({
-          mint: "SOL", // Special case for native SOL
-          balance: solBalance / 1_000_000_000, // Convert lamports to SOL
-          symbol: "SOL",
-          decimals: 9
-        });
-      }
-    } catch (err) {
-      console.error("Error fetching SOL balance:", err);
+    const solBalance = await connection.getBalance(wallet.publicKey);
+    if (solBalance > 0) {
+      resolvedTokens.push({
+        mint: "SOL",
+        balance: solBalance / web3.LAMPORTS_PER_SOL,
+        symbol: "SOL",
+        decimals: 9,
+        name: "Solana"
+      });
     }
     
-    console.log(`Found ${tokens.length} tokens with non-zero balance on ${network}`);
-    return tokens;
+    console.log(`Found ${resolvedTokens.length} tokens with non-zero balance on ${network}`);
+    
+    // Filter unknown tokens if requested
+    if (options.hideUnknown) {
+      return resolvedTokens.filter(token => token.symbol !== "Unknown");
+    }
+    
+    return resolvedTokens;
   } catch (error) {
     console.error("Error fetching user tokens:", error);
     return [];

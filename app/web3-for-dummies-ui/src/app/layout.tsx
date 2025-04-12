@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/(ui)/theme-provider";
 import { WalletContextProvider } from "@/components/wallet/wallet-provider";
 import { NetworkProvider } from "@/components/(ui)/network-context";
 import { TokenProvider } from "@/components/(ui)/token-context";
+import { ModalProvider } from "@/components/modal/modal-manager";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,6 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <ModalProvider>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={true}>
           <NetworkProvider>
             <WalletContextProvider>
@@ -38,6 +40,7 @@ export default function RootLayout({
             </WalletContextProvider>
           </NetworkProvider>
         </ThemeProvider>
+        </ModalProvider>
       </body>
     </html>
   );

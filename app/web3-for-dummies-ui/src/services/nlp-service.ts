@@ -244,6 +244,27 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
   network: 'localnet',
   confidence: 1.0,
 },
+'register token': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isRegisterToken: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'add custom token': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isRegisterToken: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
+'add token': {
+  isPayment: false,
+  isBalanceCheck: false,
+  isRegisterToken: true,
+  network: 'localnet',
+  confidence: 1.0,
+},
 };
 
 export interface PaymentInstruction {
@@ -260,6 +281,7 @@ export interface PaymentInstruction {
   mintAddress?: string;
   listAllTokens?: boolean;
   isFixTokenNames? : boolean;
+  isRegisterToken?: boolean;
   token?: string;
   amount?: number;
   recipient?: string;

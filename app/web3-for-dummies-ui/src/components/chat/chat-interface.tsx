@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { motion, AnimatePresence } from "framer-motion"
-import { Ban, DatabaseZap, Send } from "lucide-react"
+import { Ban, DatabaseZap, PlusCircle, Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
 import { executePayment, getWalletBalance, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
@@ -16,6 +16,10 @@ import { Trash2 } from "lucide-react"
 
 import dynamic from 'next/dynamic'
 import { burnSpecificTokenAmount, burnTokensByMintAddress, cleanupUnwantedTokens, fetchUserTokens, saveTokenMappingsToLocalStorage } from "@/services/tokens-service"
+
+import { TokenRegistrationModal } from '@/components/(ui)/token-registration'; 
+import { useModals } from "../modal/modal-manager"
+
 
 // Lazy load heavy components
 const NetworkSwitcher = dynamic(
@@ -128,6 +132,9 @@ export function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [isClient, setIsClient] = useState(false)
+  const { openTokenRegistration } = useModals();
+  
+  
 
   const memoizedMessages = useMemo(() => messages, [messages])
 
@@ -211,6 +218,13 @@ export function ChatInterface() {
       ? `https://explorer.solana.com/tx/${signature}`
       : `https://explorer.solana.com/tx/${signature}?cluster=${network}`;
   };
+
+  const getEffectiveNetwork = () => {
+    const params = new URLSearchParams(window.location.search);
+    const urlNetwork = params.get("network");
+    return urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+  };
+
   const handleCleanupAllTokens = async () => {
     if (!wallet.connected || !wallet.publicKey) {
       addAIMessage("Please connect your wallet to clean up tokens.");
@@ -309,6 +323,39 @@ export function ChatInterface() {
     try {
       // Process with NLP
       const parsedInstruction = await parsePaymentInstruction(userInput)
+
+      const handleTokenRegistrationSuccess = async () => {
+        const effectiveNetwork = getEffectiveNetwork();
+        
+        addAIMessage("✅ Token successfully registered! You can now use it in transactions.");
+        
+        // Refresh token balances to show the newly registered token
+        try {
+          const tokens = await fetchUserTokens(
+            connection, 
+            wallet.publicKey!, 
+            effectiveNetwork as "localnet" | "devnet" | "mainnet",
+            { hideUnknown: false }
+          );
+          
+          // Format and display the token list
+          if (tokens.length > 0) {
+            const tokenList = tokens.map(t => {
+              if (t.symbol === "SOL") {
+                return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}`;
+              }
+              return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}\n  Mint: \`${t.mint}\``;
+            });
+            
+            addAIMessage(`Updated token balances on ${effectiveNetwork}:\n${tokenList.join('\n')}`);
+          }
+        } catch (error: any) {
+          console.error("Error refreshing token balances:", error);
+        }
+      };
+
+      
+
 
       console.log("Parsed instruction:", parsedInstruction)
 
@@ -596,6 +643,31 @@ export function ChatInterface() {
         setIsLoading(false);
         return;
       }
+      if (parsedInstruction.isRegisterToken) {
+        if (!wallet.connected) {
+          addAIMessage("Please connect your wallet to register a custom token.");
+          setIsLoading(false);
+          return;
+        }
+        
+        // Show information about token registration
+        addAIMessage(
+          "To register a custom token, you'll need:\n\n" +
+          "1. The token's mint address (a Solana public key)\n" +
+          "2. A symbol for the token (e.g., USDC, SOL)\n" +
+          "3. The number of decimal places the token uses (usually between 0-9)\n\n" +
+          "Opening the registration form..."
+        );
+        
+        // Open modal using context instead of local state
+        openTokenRegistration({
+          network: getEffectiveNetwork() as "localnet" | "devnet" | "mainnet",
+          onSuccess: handleTokenRegistrationSuccess
+        });
+        
+        setIsLoading(false);
+        return;
+      }
       
       if (parsedInstruction.burnByMintAddress) {
         if (!wallet.connected) {
@@ -800,7 +872,7 @@ export function ChatInterface() {
     }
 
     setIsLoading(false)
-  }, [wallet, connection, network, addAIMessage]);
+  }, [wallet, connection, network, addAIMessage, openTokenRegistration]);
 
   const MessageWithLinks = (text: string) => {
     // Handle direct URLs
@@ -899,6 +971,42 @@ export function ChatInterface() {
       hour12: false,
     })
   }
+  const handleAddTokenClick = () => {
+    openTokenRegistration({
+      network: getEffectiveNetwork() as "localnet" | "devnet" | "mainnet",
+      onSuccess: handleTokenRegistrationSuccess
+    });
+  };
+  // Add this handler for successful token registration
+const handleTokenRegistrationSuccess = async () => {
+  const effectiveNetwork = getEffectiveNetwork();
+  
+  addAIMessage("✅ Token successfully registered! You can now use it in transactions.");
+  
+  // Refresh token balances to show the newly registered token
+  try {
+    const tokens = await fetchUserTokens(
+      connection, 
+      wallet.publicKey!, 
+      effectiveNetwork as "localnet" | "devnet" | "mainnet",
+      { hideUnknown: false }
+    );
+    
+    // Format and display the token list
+    if (tokens.length > 0) {
+      const tokenList = tokens.map(t => {
+        if (t.symbol === "SOL") {
+          return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}`;
+        }
+        return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}\n  Mint: \`${t.mint}\``;
+      });
+      
+      addAIMessage(`Updated token balances on ${effectiveNetwork}:\n${tokenList.join('\n')}`);
+    }
+  } catch (error: any) {
+    console.error("Error refreshing token balances:", error);
+  }
+};
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
@@ -936,6 +1044,16 @@ export function ChatInterface() {
             <Ban className="h-4 w-4 mr-1" />
             <span className="text-sm">Clear Tokens</span>
           </Button>
+          <Button 
+            onClick={handleAddTokenClick} // Updated to use the new handler
+            variant="ghost" 
+            size="sm"
+            className="text-green-400 hover:text-green-300"
+            title="Register Custom Token"
+          >
+            <PlusCircle className="h-4 w-4 mr-1" />
+            <span className="text-sm">Add Token</span>
+          </Button>
           <NetworkSwitcher />
         </div>
       </div>
@@ -971,6 +1089,13 @@ export function ChatInterface() {
           walletConnected={wallet.connected} 
         />
       </div>
+      {/* Add Token Registration Modal */}
+      {/* <TokenRegistrationModal
+        isOpen={isTokenRegistrationModalOpen}
+        onClose={() => setIsTokenRegistrationModalOpen(false)}
+        network={getEffectiveNetwork() as "localnet" | "devnet" | "mainnet"}
+        onSuccess={handleTokenRegistrationSuccess}
+      /> */}
     </div>
   )
 }
