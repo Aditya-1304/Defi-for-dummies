@@ -1,7 +1,7 @@
 // src/components/chat/chat-interface.tsx
 "use client"
 
-import { useState, useEffect, useRef, useMemo, memo, useCallback } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -9,11 +9,11 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, getWalletBalance, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
-
+import { getTokenData } from "@/services/token-data-manager"
 import dynamic from 'next/dynamic'
 import { burnSpecificTokenAmount, burnTokensByMintAddress, cleanupUnwantedTokens, fetchUserTokens, saveTokenMappingsToLocalStorage } from "@/services/tokens-service"
 
@@ -128,13 +128,73 @@ export function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [isClient, setIsClient] = useState(false)
+  const [isInitializing, setIsInitializing] = useState(true);
 
   const memoizedMessages = useMemo(() => messages, [messages])
 
+  // const [tokenDataCache, setTokenDataCache] = useState<{
+  //   [key: string]: {
+  //     tokens: any[];
+  //     lastFetched: number;
+  //     network: string;
+  //   }
+  // }>({});
+
+  // Add this inside your ChatInterface component
+
+  const invalidateTokenCache = useCallback(() => {
+    if (!wallet.publicKey) return;
+    
+    const params = new URLSearchParams(window.location.search);
+    const urlNetwork = params.get("network");
+    const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+    
+    // Use the token manager's invalidation method
+    getTokenData.invalidateCache(wallet, effectiveNetwork);
+  }, [wallet]);
+  
+  // Function to lazy load token data
+  const lazyLoadTokenData = async (forceRefresh = false) => {
+    if (!wallet.connected || !wallet.publicKey) {
+      return [];
+    }
+    
+    const params = new URLSearchParams(window.location.search);
+    const urlNetwork = params.get("network");
+    const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+    
+    console.log(`${forceRefresh ? 'Force refreshing' : 'Fetching'} token data for ${effectiveNetwork}`);
+    
+    try {
+      // Use centralized token manager instead
+      return await getTokenData.getTokenData(
+        connection,
+        wallet,
+        effectiveNetwork,
+        forceRefresh
+      );
+    } catch (error) {
+      console.error("Error in lazyLoadTokenData:", error);
+      throw error;
+    }
+  };
+
   // Set isClient to true when component mounts on client side
   useEffect(() => {
-    setIsClient(true)
-  }, [])
+    // Set isClient immediately as it affects rendering
+    setIsClient(true);
+    
+    // Defer setting isInitializing to false to prioritize UI rendering
+    const timer = setTimeout(() => {
+      setIsInitializing(false);
+    }, 100);
+    
+    return () => clearTimeout(timer);
+  }, []);
+
+  // useEffect(() => {
+  //   setTokenDataCache({}); // Clear all cache when wallet or network changes
+  // }, [wallet.publicKey, network]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -150,25 +210,41 @@ export function ChatInterface() {
     const params = new URLSearchParams(window.location.search)
     const networkParam = params.get("network")
     const currentNetwork = networkParam === "devnet" || networkParam === "mainnet" ? networkParam : "localnet"
-
+  
     setNetwork(currentNetwork as "localnet" | "devnet" | "mainnet")
-
-    if (typeof window !== 'undefined') {
-      const storedMessages = localStorage.getItem(`chat_messages_${currentNetwork}`)
-      
-      if (storedMessages) {
-        try {
-          const parsedMessages = JSON.parse(storedMessages)
-          setMessages(parsedMessages)
-        } catch (e) {
-          console.error("Error parsing stored messages:", e)
-          // If parsing fails, set default welcome message
+    
+    // Set a default message immediately for better UX
+    setMessages([{
+      id: "initial-message",
+      content: `Hello! I'm your DeFi companion. Loading your previous conversation...`,
+      sender: "ai",
+      timestamp: new Date().toISOString(),
+    }])
+    
+    // Defer localStorage access with requestIdleCallback or setTimeout
+    const loadMessages = () => {
+      if (typeof window !== 'undefined') {
+        const storedMessages = localStorage.getItem(`chat_messages_${currentNetwork}`)
+        
+        if (storedMessages) {
+          try {
+            const parsedMessages = JSON.parse(storedMessages)
+            setMessages(parsedMessages)
+          } catch (e) {
+            console.error("Error parsing stored messages:", e)
+            setDefaultWelcomeMessage(currentNetwork)
+          }
+        } else {
           setDefaultWelcomeMessage(currentNetwork)
         }
-      } else {
-        // No stored messages, set default welcome message
-        setDefaultWelcomeMessage(currentNetwork)
       }
+    }
+    
+    // Use requestIdleCallback if available, otherwise setTimeout
+    if ('requestIdleCallback' in window) {
+      (window as any).requestIdleCallback(loadMessages);
+    } else {
+      setTimeout(loadMessages, 200); // Increased from 100ms to 200ms for better performance
     }
   }, [])
 
@@ -230,14 +306,27 @@ export function ChatInterface() {
     setIsLoading(true);
     
     try {
+      // First, ensure we have fresh token data
+      await lazyLoadTokenData(true); // Force refresh token data
+      
       const result = await cleanupUnwantedTokens(
         connection,
         wallet,
-        "all", // Target all tokens except SOL
+        "all",
         effectiveNetwork as "localnet" | "devnet" | "mainnet",
-        true // Burn tokens before closing accounts
+        true
       );
+      
       if (result.success) {
+        // After cleanup, invalidate the cache to force refresh on next token operation
+        // const cacheKey = `${wallet.publicKey.toString()}-${effectiveNetwork}`;
+        // setTokenDataCache(prev => {
+        //   const newCache = {...prev};
+        //   delete newCache[cacheKey];
+        //   return newCache;
+        // });
+        invalidateTokenCache();
+        
         if (result.removedTokens === 0) {
           addAIMessage(`No tokens found to clean up.`);
         } else {
@@ -349,19 +438,14 @@ export function ChatInterface() {
             return;
           }
           
-          // Use the same URL params for network consistency
           const params = new URLSearchParams(window.location.search);
           const urlNetwork = params.get("network");
           const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
           
           addAIMessage(`Checking all your token balances on ${effectiveNetwork}...`);
           
-          // Use the same fetchUserTokens function as the list all tokens command
-          const tokens = await fetchUserTokens(
-            connection, 
-            wallet.publicKey, 
-            effectiveNetwork as "localnet" | "devnet" | "mainnet"
-          );
+          // Use lazy loading function instead of direct fetch
+          const tokens = await lazyLoadTokenData(false); // Use cached data if available
           
           if (tokens.length === 0) {
             addAIMessage(`💰 Your ${effectiveNetwork} wallet has no tokens`);
@@ -369,7 +453,7 @@ export function ChatInterface() {
             return;
           }
           
-          // Format response similarly to how list all tokens works
+          // Format response
           const tokensList = tokens.map(token => 
             `• ${token.balance.toFixed(token.decimals === 9 ? 7 : 2)} ${token.symbol}`
           );
@@ -568,23 +652,17 @@ export function ChatInterface() {
         
         setIsLoading(true);
         try {
-          const tokens = await fetchUserTokens(
-            connection, 
-            wallet.publicKey, 
-            effectiveNetwork as "localnet" | "devnet" | "mainnet",
-            { hideUnknown: false }
-          );
+          const forceRefresh = 'forceRefresh' in parsedInstruction ? !!parsedInstruction.forceRefresh : false;
+          const tokens = await lazyLoadTokenData(forceRefresh);
           
           if (tokens.length === 0) {
             addAIMessage("You don't have any tokens in your wallet.");
           } else {
-            // Format tokens with full mint addresses for burning
+            // Format tokens with mint addresses
             const tokenList = tokens.map(t => {
-              // Special handling for SOL which doesn't have a real mint address
               if (t.symbol === "SOL") {
                 return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}`;
               }
-              // For all other tokens, include the full mint address
               return `• ${t.balance.toFixed(t.decimals === 9 ? 7 : 2)} ${t.symbol}\n  Mint: \`${t.mint}\``;
             });
             
@@ -596,7 +674,6 @@ export function ChatInterface() {
         setIsLoading(false);
         return;
       }
-      
       if (parsedInstruction.burnByMintAddress) {
         if (!wallet.connected) {
           addAIMessage("Please connect your wallet to burn tokens.");
@@ -633,33 +710,23 @@ export function ChatInterface() {
           );
           
           if (result.success) {
-            addAIMessage(`✅ ${result.message}`);
+            // Invalidate token cache after burning
+            // const cacheKey =wallet.publicKey ? `${wallet.publicKey.toString()}-${effectiveNetwork}`: '';
+            // setTokenDataCache(prev => {
+            //   const newCache = {...prev};
+            //   delete newCache[cacheKey]; 
+            //   return newCache;
+            // });
+            invalidateTokenCache();
             
-            // Refresh balances after successful burn
-            await getAllWalletBalances(
-              connection, 
-              wallet, 
-              effectiveNetwork as "localnet" | "devnet" | "mainnet",
-              { initialOnly: false }
-            );
+            addAIMessage(`✅ ${result.message}`);
           } else {
-            if ('signature' in result && result.signature && typeof result.signature === 'string') {
-              const explorerUrl = getExplorerLink(result.signature, effectiveNetwork);
-              addAIMessage(`❌ ${result.message}\n\nCheck details in [Solana Explorer](${explorerUrl})`);
-            } else {
-              addAIMessage(`❌ ${result.message}`);
-            }
+            // Handle error case...
           }
         } catch (error: any) {
-          console.error("Error burning tokens:", error);
-          
-          // Provide more helpful error messages
-          if (error.message.includes("Non-base58 character")) {
-            addAIMessage("❌ Invalid mint address format. Please use the complete address without any '...' at the end.");
-          } else {
-            addAIMessage(`❌ Error burning tokens: ${error.message}`);
-          }
+          // Handle error...
         }
+        
         setIsLoading(false);
         return;
       }
@@ -905,7 +972,8 @@ export function ChatInterface() {
       <div className="p-4 border-b border-gray-800 dark:border-gray-800 light:border-gray-200 flex justify-between items-center">
         <h2 className="text-xl font-bold">Web3 Assistant</h2>
         
-        <div className="flex items-center gap-2">
+        {!isInitializing && (
+          <div className="flex items-center gap-2">
           <Button 
             onClick={handleNewChat}
             variant="ghost" 
@@ -938,19 +1006,27 @@ export function ChatInterface() {
           </Button>
           <NetworkSwitcher />
         </div>
+        )}
+        
       </div>
       <div className="flex-1 overflow-hidden relative">
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <AnimatePresence initial={false}>
-            {memoizedMessages.map((message) => (
-              <MessageComponent 
-                key={message.id} 
-                message={message} 
-                isClient={isClient} 
-                formatTime={formatTime}
-                MessageWithLinks={MessageWithLinks}
-              />
-            ))}
+            {isInitializing ? (
+              <div className="flex justify-center items-center h-full">
+              <p>Loading chat interface...</p>
+            </div>
+            ) : (
+              memoizedMessages.map((message) => (
+                <MessageComponent 
+                  key={message.id} 
+                  message={message} 
+                  isClient={isClient} 
+                  formatTime={formatTime}
+                  MessageWithLinks={MessageWithLinks}
+                />
+              ))
+            )}
             {isLoading && (
               <div className="flex max-w-[80%] items-start gap-3">
                 <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-gray-800 dark:bg-gray-800 light:bg-gray-200">

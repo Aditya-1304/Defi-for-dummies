@@ -4,7 +4,7 @@ import { Program, AnchorProvider, web3, BN } from '@coral-xyz/anchor';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout } from '@solana/spl-token';
 import { Web3ForDummies } from '../public/idl/types/web3_for_dummies';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
-import { getOrCreateToken, getTokenBalance, transferToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
+import {  mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 
 import * as spl from '@solana/spl-token';
 

@@ -1,11 +1,13 @@
 import { Connection, PublicKey, Keypair, Transaction } from "@solana/web3.js";
 import {
-  createMint, getMint, getOrCreateAssociatedTokenAccount, createTransferInstruction,
-  mintTo, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
-  transfer, TOKEN_PROGRAM_ID, TokenAccountNotFoundError,
+ getMint,  createTransferInstruction,
+   getAssociatedTokenAddress, createAssociatedTokenAccountInstruction,
+   TOKEN_PROGRAM_ID, TokenAccountNotFoundError,
   createInitializeMintInstruction, createMintToInstruction, createCloseAccountInstruction,
   createBurnInstruction
 } from "@solana/spl-token";
+import { tokenFetchManager } from './token-fetch-manager';
+
 import * as web3 from '@solana/web3.js';
 
 // Definition for token information
@@ -16,6 +18,11 @@ export type TokenInfo = {
   name?: string;
   logoURI?: string;
 };
+let isInitialLoadPeriod = true;
+setTimeout(() => {
+  isInitialLoadPeriod = false;
+  console.log("Initial load period ended, token fetching enabled");
+}, 3000);
 
 function saveTokenMappingToLocalStorage(network: string, mintAddress: string, tokenInfo: {
   symbol: string;
@@ -65,25 +72,30 @@ export const tokenCache: Record<string, Record<string, TokenInfo>> = {
   mainnet: {},
 };
 
-export function preloadTokensFromLocalStorage(): void {
-  if (typeof window === 'undefined') return;
+export function preloadTokensFromLocalStorage(options = { 
+  skipBalanceFetch: false,
+  skipNetworkQueries: false
+}): Record<string, Record<string, TokenInfo>> {
+  if (typeof window === 'undefined') return tokenCache;
 
-  if(hasPreloaded) {
-    console.log("Token preloading already done");
-    return;
+  if (hasPreloaded) {
+    console.log("Token metadata already preloaded");
+    return tokenCache;
   }
+  
+  // Always skip balance fetching during preload
+  console.log("Preloading token metadata from localStorage only");
   
   const networks = ["localnet", "devnet", "mainnet"];
   
   for (const network of networks) {
-    // Get all keys from localStorage that match our token pattern
-    const tokenKeys = Object.keys(localStorage).filter(key => 
+    // Only load from localStorage, no network calls
+    const tokenKeys = Object.keys(localStorage || {}).filter(key => 
       key.startsWith(`token_${network}_`)
     );
     
     for (const key of tokenKeys) {
       try {
-        // Extract the token symbol from the key (token_network_SYMBOL)
         const tokenSymbol = key.split('_')[2];
         const cachedToken = localStorage.getItem(key);
         
@@ -95,15 +107,17 @@ export function preloadTokensFromLocalStorage(): void {
             symbol: tokenSymbol,
             name: `${tokenSymbol} Test Token`
           };
-          console.log(`Preloaded ${tokenSymbol} token on ${network} from localStorage`);
+          console.log(`Preloaded ${tokenSymbol} token metadata from localStorage`);
         }
       } catch (error) {
         console.error(`Error preloading token from ${key}:`, error);
       }
     }
   }
+  
   hasPreloaded = true;
-  console.log('Token preloading complete:', tokenCache);
+  console.log('Token metadata preload complete:', tokenCache);
+  return tokenCache;
 }
 
 // Well-known token addresses for different networks
@@ -628,19 +642,42 @@ export async function fetchUserTokens(
   connection: Connection,
   walletAddress: PublicKey,
   network: "localnet" | "devnet" | "mainnet" = "localnet",
-  options: { hideUnknown?: boolean } = { hideUnknown: true }
-): Promise<{
+  options: { hideUnknown?: boolean, skipInitialFetch?: boolean, forceRefresh?: boolean } = { hideUnknown: true }
+) : Promise<{
   mint: string;
   balance: number;
   symbol: string;
   decimals: number;
 }[]> {
+
+  console.log(`🔍 Token fetch requested by:`, new Error().stack);
+
+  
+  if (options.skipInitialFetch || 
+  document.readyState !== 'complete' || 
+  isInitialLoadPeriod || 
+  tokenFetchManager.shouldBlockTokenFetch(options.forceRefresh)) {
+
+// Log which condition triggered the block
+  const reason = options.skipInitialFetch ? 'skipInitialFetch flag set' : 
+                  isInitialLoadPeriod ? 'still in initial load period' :
+                  document.readyState !== 'complete' ? 'document not fully loaded' :
+                  'token fetch manager blocked';
+
+  console.log(`⏭️ Skipping token fetch - ${reason}`);
+
+  // Return empty array without any further processing
+    return [];
+                      }
+
   if (!connection || !walletAddress) {
     console.log("Missing connection or wallet address");
     return [];
   }
   
   try {
+
+    
     console.log(`Fetching on-chain tokens for ${walletAddress.toString()} on ${network}...`);
     
     // Get all token accounts owned by the user
@@ -1300,9 +1337,9 @@ export async function cleanupUnwantedTokens(
     
     message += `Successfully closed ${closedCount} token accounts and recovered approximately ${estimatedRecoveredSOL.toFixed(6)} SOL`;
 
-    const signatures: string[] = [];
-    const signature = await wallet.sendTransaction(close, connection);
-  signatures.push(signature);
+  //   const signatures: string[] = [];
+  //   const signature = await wallet.sendTransaction(close, connection);
+  // signatures.push(signature);
     
     return {
       success: true,
@@ -1310,7 +1347,7 @@ export async function cleanupUnwantedTokens(
       removedTokens: closedCount,
       recoveredSOL: estimatedRecoveredSOL,
       burnedTokens,
-      signatures 
+      // signatures 
     };
   } catch (error: any) {
     console.error("Error cleaning up tokens:", error);
