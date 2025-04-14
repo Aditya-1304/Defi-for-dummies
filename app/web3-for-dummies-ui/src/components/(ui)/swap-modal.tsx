@@ -213,7 +213,7 @@ export function JupiterSwapModal({
                   <SelectValue placeholder="Select token" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Select token</SelectItem>
+                  {/* <SelectItem value="">Select token</SelectItem> */}
                   {tokens.map(token => (
                     <SelectItem key={token.address} value={token.address}>
                       {token.symbol} - {token.name}
@@ -260,7 +260,7 @@ export function JupiterSwapModal({
                   <SelectValue placeholder="Select token" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Select token</SelectItem>
+                  {/* <SelectItem value="">Select token</SelectItem> */}
                   {tokens
                     .filter(t => t.address !== fromToken?.address)
                     .map(token => (

@@ -4,13 +4,24 @@ import { JupiterSwapModal } from "@/components/(ui)/swap-modal";
 import { Button } from "@/components/ui/button";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { ArrowDownUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function SwapPage() {
   const {connection} = useConnection();
   const wallet = useWallet();
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(true);
   const [swapHistory, setSwapHistory] = useState<any[]>([]);
+  const [network, setNetwork] = useState<'localnet' | "devnet" | "mainnet">("localnet");
+
+
+  useEffect(() => {
+    // Get network from URL parameters
+    const params = new URLSearchParams(window.location.search);
+    const urlNetwork = params.get("network");
+    if (urlNetwork === "devnet" || urlNetwork === "mainnet") {
+      setNetwork(urlNetwork);
+    }
+  }, []);
 
   const handleSwapSuccess = (result: any) => {
     setSwapHistory(prev => [result, ...prev]);
