@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{ Mint, TokenAccount, TokenInterface, TransferChecked, transfer_checked };
+use anchor_spl::{associated_token::AssociatedToken, token_interface::{ transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked }};
 
 declare_id!("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv");
 
@@ -52,7 +52,81 @@ pub struct ProcessTransaction<'info> {
 
 }
 
+#[account]
+#[derive(Default)]
+pub struct LiquidityPool {
+    pub token_a_mint: Pubkey,
+    pub token_b_mint: Pubkey,
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    pub bump: u8,
+    pub vault_a_bump: u8,
+    pub vault_b_bump: u8,
 
+}
+
+const POOL_ACCOUNT_SIZE: usize = 8 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 64;
+
+#[derive(Accounts)]
+pub struct InitializePool<'info> {
+    #[account(
+        init,
+        payer = initializer,
+        seeds = [
+            b"pool",
+            min(token_a_mint.key(), token_b_mint.key()).as_ref(),
+            max(token_a_mint.key(), token_b_mint.key()).as_ref(),
+        ],
+        bump,
+        space = POOL_ACCOUNT_SIZE,
+    )]
+    pub pool: Account<'info, LiquidityPool>,
+
+    #[account(
+        seeds = [
+            b"pool",
+            min(token_a_mint.key(), token_b_mint.key()).as_ref(),
+            max(token_a_mint.key(), token_b_mint.key()).as_ref(),
+            &[pool.bump],
+        ],
+        bump,
+    )]
+    pub pool_authority: AccountInfo<'info>,
+
+    pub token_a_mint: InterfaceAccount<'info, Mint>,
+    pub token_b_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        init,
+        payer = initializer,
+        associated_token::mint = token_a_mint,
+        associated_token::authority = pool_authority,
+    )]
+    pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = initializer,
+        associated_token::mint = token_b_mint,
+        associated_token::authority = pool_authority,
+    )]
+    pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+
+}
+
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(
+        
+    )]
+}
 #[event]
 pub struct TransactionEvent {
     pub from: Pubkey,
