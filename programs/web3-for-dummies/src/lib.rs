@@ -12,7 +12,11 @@ use anchor_spl::{
         mint_to,
         Burn,
         burn
-     }};
+    },
+    
+};
+
+use std::ops::DerefMut;
 
 
 declare_id!("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv");
@@ -29,8 +33,8 @@ pub mod web3_for_dummies {
         pool.token_a_vault = ctx.accounts.token_a_vault.key();
         pool.token_b_vault = ctx.accounts.token_b_vault.key();
         pool.bump = ctx.bumps.pool;
-        pool.vault_a_bump = ctx.bumps.token_a_vault;
-        pool.vault_b_bump = ctx.bumps.token_b_vault;
+        // pool.vault_a_bump = ctx.bumps.token_a_vault;
+        // pool.vault_b_bump = ctx.bumps.token_b_vault;
 
         msg!("Pool Initialized!");
         msg!("Mint A: {}", pool.token_a_mint);
@@ -45,35 +49,50 @@ pub mod web3_for_dummies {
     pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
         let pool = &ctx.accounts.pool;
 
-        let (source_vault, source_vault_bump, dest_vault, dest_vault_bump, source_mint_decimals) =
+        if ctx.accounts.user_source_token_account.mint != pool.token_a_mint && ctx.accounts.user_source_token_account.mint != pool.token_b_mint {
+            return err!(SwapError::InvalidMint);
+        }
+
+        let (source_vault_key, dest_vault_key, source_mint_decimals) = {
+           
             if ctx.accounts.user_source_token_account.mint == pool.token_a_mint {
                 (
-                    &ctx.accounts.token_a_vault,
-                    pool.vault_a_bump,
-                    &ctx.accounts.token_b_vault,
-                    pool.vault_b_bump,
-                    ctx.accounts.token_a_mint.decimals,
-                )
-            } else if ctx.accounts.user_source_token_account.mint == pool.token_b_mint {
-                (
-                    &ctx.accounts.token_b_vault,
-                    pool.vault_b_bump,
-                    &ctx.accounts.token_a_vault,
-                    pool.vault_a_bump,
-                    ctx.accounts.token_b_mint.decimals,
+                    ctx.accounts.token_a_vault.key(),
+                    // pool.vault_a_bump,
+                    ctx.accounts.token_b_vault.key(),
+                    // pool.vault_b_bump,
+                    ctx.accounts.source_mint.decimals,
                 )
             } else {
-                return err!(SwapError::InvalidDestinationMint)
-            };
+                (
+                    ctx.accounts.token_b_vault.key(),
+                    // pool.vault_b_bump,
+                    ctx.accounts.token_a_vault.key(),
+                    // pool.vault_a_bump,
+                    ctx.accounts.source_mint.decimals,
+                )
+            } 
+        };
 
-            if ctx.accounts.user_destination_token_account.mint != dest_vault.mint {
+            let token_a_vault_mut = &mut ctx.accounts.token_a_vault;
+            let token_b_vault_mut = &mut ctx.accounts.token_b_vault;
+
+
+            let (final_source_vault, final_dest_vault) = if token_a_vault_mut.key() == source_vault_key {
+                (token_a_vault_mut, token_b_vault_mut)
+           } else {
+                (token_b_vault_mut, token_a_vault_mut) // Swap references if needed
+           };
+
+
+            if ctx.accounts.user_destination_token_account.mint != final_dest_vault.mint {
                 return err!(SwapError::InvalidDestinationMint);
             }
 
-            source_vault.reload()?;
-            dest_vault.reload()?;
-            let reserve_in = source_vault.amount;
-            let reserve_out = dest_vault.amount;
+            final_source_vault.reload()?;
+            final_dest_vault.reload()?;
+            let reserve_in = final_source_vault.amount;
+            let reserve_out = final_dest_vault.amount;
 
 
             let amount_in_u128 = amount_in as u128;
@@ -89,7 +108,7 @@ pub mod web3_for_dummies {
 
             let constant_product = reserve_in_u128.checked_mul(reserve_out_u128).ok_or(SwapError::CalculationOverflow)?;
 
-            let new_reserve_in = reserve_in_u128.checked_add(amount_in_u128).ok_or(SwapError::CalculationOverflow);
+            let new_reserve_in = reserve_in_u128.checked_add(amount_in_u128).ok_or(SwapError::CalculationOverflow)?;
 
             let new_reserve_out = constant_product.checked_div(new_reserve_in).ok_or(SwapError::CalculationOverflow)?;
 
@@ -104,7 +123,7 @@ pub mod web3_for_dummies {
             let transfer_in_accounts = TransferChecked {
                 from: ctx.accounts.user_source_token_account.to_account_info(),
                 mint: ctx.accounts.source_mint.to_account_info(),
-                to: source_vault.to_account_info(),
+                to: final_source_vault.to_account_info(),
                 authority: ctx.accounts.user_authority.to_account_info(),
             };
 
@@ -112,18 +131,20 @@ pub mod web3_for_dummies {
                 ctx.accounts.token_program.to_account_info(),
                 transfer_in_accounts,
             );
-            transfer_checked(transfer_in_cpi,amount_in, source_mint_decimals);
+            transfer_checked(transfer_in_cpi,amount_in, source_mint_decimals)?;
 
 
             let pool_signer_seeds : &[&[&[u8]]] = &[&[
                 b"pool",
-                pool.token_a_mint.as_ref(),
-                pool.token_b_mint.as_ref(),
+                // pool.token_a_mint.as_ref(),
+                // pool.token_b_mint.as_ref(),
+                min(pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()),
+                max(pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()),
                 &[pool.bump]
             ]];
         
             let transfer_out_accounts = TransferChecked {
-                from: dest_vault.to_account_info(),
+                from: final_dest_vault.to_account_info(),
                 mint: ctx.accounts.destination_mint.to_account_info(),
                 to: ctx.accounts.user_destination_token_account.to_account_info(),
                 authority: ctx.accounts.pool_authority.to_account_info(),
@@ -135,7 +156,7 @@ pub mod web3_for_dummies {
                 pool_signer_seeds,
             );
 
-            transfer_checked(transfer_out_cpi, amount_out, dest_vault.decimals)?;
+            transfer_checked(transfer_out_cpi, amount_out, ctx.accounts.destination_mint.decimals)?;
 
             emit!(SwapEvent {
                 pool: ctx.accounts.pool.key(),
@@ -181,12 +202,12 @@ pub struct LiquidityPool {
     pub token_a_vault: Pubkey,
     pub token_b_vault: Pubkey,
     pub bump: u8,
-    pub vault_a_bump: u8,
-    pub vault_b_bump: u8,
+    // pub vault_a_bump: u8,
+    // pub vault_b_bump: u8,
 
 }
-
-const POOL_ACCOUNT_SIZE: usize = 8 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 64;
+ 
+const POOL_ACCOUNT_SIZE: usize = 8 + ( 32 * 4 ) + 1 + 64;
 
 #[derive(Accounts)]
 pub struct InitializePool<'info> {
@@ -203,6 +224,7 @@ pub struct InitializePool<'info> {
     )]
     pub pool: Account<'info, LiquidityPool>,
 
+    /// CHECK: Authority derived from pool seeds, used for signing vault transfers
     #[account(
         seeds = [
             b"pool",
@@ -251,11 +273,17 @@ pub struct Swap<'info> {
             max(source_mint.key(), destination_mint.key()).as_ref(),
         ],
         bump = pool.bump,
+        // constraint = token_a_vault.mint == pool.token_a_vault @ SwapError::InvalidVault,
+        // constraint = token_b_vault.mint == pool.token_b_vault @ SwapError::InvalidVault,
+        
+        constraint = token_a_vault.key() == pool.token_a_vault @SwapError::InvalidVault,
+        constraint = token_b_vault.key() == pool.token_b_vault @SwapError::InvalidVault,
         constraint = (pool.token_a_mint == source_mint.key() || pool.token_a_mint == destination_mint.key()) @ SwapError::InvalidMint,
         constraint = (pool.token_b_mint == source_mint.key() || pool.token_b_mint == destination_mint.key()) @ SwapError::InvalidMint,
     )]
     pub pool: Account<'info, LiquidityPool>,
 
+    /// CHECK: Authority derived from pool seeds, used for signing vault transfers OUT
     #[account(
         seeds = [
             b"pool",
@@ -267,16 +295,28 @@ pub struct Swap<'info> {
     )]
     pub pool_authority: AccountInfo<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = user_source_token_account.owner == user_authority.key() @ SwapError::InvalidOwner,
+    )]
     pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = user_destination_token_account.owner == user_authority.key() @ SwapError::InvalidOwner,
+    )]
     pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = (token_a_vault.mint == source_mint.key() || token_a_vault.mint == destination_mint.key()) @ SwapError::InvalidMint,
+    )]
     pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = (token_b_vault.mint == source_mint.key() || token_b_vault.mint == destination_mint.key()) @ SwapError::InvalidMint,
+    )]
     pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
@@ -351,6 +391,8 @@ pub enum SwapError {
     CalculationOverflow,
     #[msg("Invalid vault account provided.")]
     InvalidVault,
+    #[msg("Invalid owner of the token account.")]
+    InvalidOwner,
 } 
     
 use std::cmp::{max, min};
