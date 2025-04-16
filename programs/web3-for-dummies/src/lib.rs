@@ -70,6 +70,8 @@ pub mod web3_for_dummies {
             return err!(SwapError::InvalidMint);
         }
 
+        
+
         // --- Determine Source/Destination Vaults ---
         // Figure out which pool vault receives tokens (source) and which sends tokens (destination)
         // based on the mint of the user's source token account.
@@ -122,6 +124,17 @@ pub mod web3_for_dummies {
             return err!(SwapError::ZeroAmount); // Input amount must be positive
         }
 
+        let fee_numerator = 3;
+        let fee_denomiantor = 1000;
+        let amount_in_after_fee = amount_in_u128
+            .checked_mul(fee_denomiantor - fee_numerator)
+            .ok_or(SwapError::CalculationOverflow)?
+            .checked_div(fee_denomiantor)
+            .ok_or(SwapError::CalculationOverflow)?;
+
+        let constant_product = reserve_in_u128.checked_mul(reserve_out_u128).ok_or(SwapError::CalculationOverflow)?;
+        let new_reserve_in = reserve_in_u128.checked_add(amount_in_after_fee).ok_or(SwapError::CalculationOverflow)?;
+
         // Calculate the constant product (k)
         // x * y = k
         let constant_product = reserve_in_u128.checked_mul(reserve_out_u128).ok_or(SwapError::CalculationOverflow)?;
@@ -146,6 +159,17 @@ pub mod web3_for_dummies {
         // Ensure the calculated amount_out meets the user's minimum requirement
         if amount_out < min_amount_out {
             return err!(SwapError::SlippageExceeded);
+        }
+
+        let price_impact_bs = amount_out_u128
+        .checked_mul(10000)
+        .ok_or(SwapError::CalculationOverflow)?
+        .checked_div(reserve_out_u128)
+        .ok_or(SwapError::CalculationOverflow)?;
+
+        const MAX_PRICE_IMPACT_BPS: u128 = 1000;
+        if price_impact_bs > MAX_PRICE_IMPACT_BPS {
+            return err!(SwapError::ExcessivePriceImpact);
         }
 
         // --- Perform Transfers via CPI ---
@@ -237,42 +261,75 @@ pub mod web3_for_dummies {
 
     pub fn add_liquidity(ctx: Context<AddLiquidity>, amount_a: u64, amount_b: u64) -> Result<()> {
         if amount_a == 0 || amount_b == 0 {
-            return  err!(SwapError::ZeroAmount);
+            return err!(SwapError::ZeroAmount);
         }
-
+    
         let pool = &ctx.accounts.pool;
-
+    
+        // Transfer token A
         let transfer_a_accounts = TransferChecked {
             from: ctx.accounts.user_token_a_account.to_account_info(),
             mint: ctx.accounts.token_a_mint.to_account_info(),
             to: ctx.accounts.token_a_vault.to_account_info(),
             authority: ctx.accounts.user_authority.to_account_info(),
         };
-
-        let transfer_a_cpi = CpiContext::new(ctx.accounts.token_program.to_account_info(), transfer_a_accounts);
-
+        let transfer_a_cpi = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(), 
+            transfer_a_accounts
+        );
         transfer_checked(transfer_a_cpi, amount_a, ctx.accounts.token_a_mint.decimals)?;
-
+    
+        // Transfer token B
         let transfer_b_accounts = TransferChecked {
             from: ctx.accounts.user_token_b_account.to_account_info(),
             mint: ctx.accounts.token_b_mint.to_account_info(),
             to: ctx.accounts.token_b_vault.to_account_info(),
             authority: ctx.accounts.user_authority.to_account_info(),
         };
-
         let transfer_b_cpi = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             transfer_b_accounts,
         );
         transfer_checked(transfer_b_cpi, amount_b, ctx.accounts.token_b_mint.decimals)?;
+    
+        // Check for proportional deposits if pool already has liquidity
+        ctx.accounts.token_a_vault.reload()?;
+        ctx.accounts.token_b_vault.reload()?;
+        let reserve_a = ctx.accounts.token_a_vault.amount;
+        let reserve_b = ctx.accounts.token_b_vault.amount;
+    
+        // Only check proportions if we already have liquidity
+        let too_small: bool;
+        let too_large: bool;
+        
+        if reserve_a > 0 && reserve_b > 0 {
+            let expected_b = (amount_a as u128)
+                .checked_mul(reserve_b as u128)
+                .ok_or(SwapError::CalculationOverflow)?
+                .checked_div(reserve_a as u128)
+                .ok_or(SwapError::CalculationOverflow)?;
+                    
+            // Allow 1% slippage on the ratio
+            let min_expected_b = expected_b.saturating_mul(99).checked_div(100).unwrap_or(0);
+            let max_expected_b = expected_b.saturating_mul(101).checked_div(100).unwrap_or(u128::MAX);
 
+            let amount_b_u128 = amount_b as u128;
+            
+            too_small = amount_b_u128 < min_expected_b;
+            too_large = amount_b_u128 > max_expected_b;
+            
+            if too_small || too_large {
+                return err!(SwapError::DisproportionateLiquidity);
+            }
+        }
+    
         emit!(LiquidityAddedEvent {
             pool: pool.key(),
             user: ctx.accounts.user_authority.key(),
             amount_a,
             amount_b,
         });
-
+    
         Ok(())
     }
 }
@@ -447,6 +504,17 @@ pub struct AddLiquidity<'info> {
     )]
     pub pool: Account<'info, LiquidityPool>,
 
+    /// CHECK: This is the pool authority PDA that's derived deterministically.
+    #[account(
+        seeds = [
+            b"pool",
+            pool.token_a_mint.as_ref(),
+            pool.token_b_mint.as_ref(),
+        ],
+        bump = pool.bump,
+    )]
+    pub pool_authority: AccountInfo<'info>,
+
     #[account(
         constraint = token_a_mint.key() == pool.token_a_mint @ SwapError::InvalidMint,
     )]
@@ -473,10 +541,16 @@ pub struct AddLiquidity<'info> {
     )]
     pub user_token_b_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = token_a_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+    )]
     pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = token_b_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+    )]
     pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut)]
@@ -572,4 +646,8 @@ pub enum SwapError {
     InvalidVault,
     #[msg("Invalid owner of the token account.")]
     InvalidOwner,
+    #[msg("Price impact too high")]
+    ExcessivePriceImpact,
+    #[msg("Disproportionate liquidity provided")]
+    DisproportionateLiquidity,
 }
