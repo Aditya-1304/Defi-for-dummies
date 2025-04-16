@@ -513,8 +513,185 @@ describe("web3-for-dummies", () => {
             assert.equal(vaultA_after - vaultA_before, swapAmountA.toNumber(), "Vault A balance change mismatch (A->B swap)");
             assert.equal(vaultB_before - vaultB_after, actualAmountOutB, "Vault B balance change mismatch (A->B swap)");
 
-        })
-    })
+        });
+
+        it("Swaps Token B for Token A successfully", async () => {
+            const aliceA_before = await getTokenBalance(aliceTokenAAccount)
+            const aliceB_before = await getTokenBalance(aliceTokenBAccount)
+            const vaultA_before = await getTokenBalance(poolTokenAVault)
+            const vaultB_before = await getTokenBalance(poolTokenBVault)
+
+            const expectedAOut = calculateExpectedOut(swapAmountB, new BN(vaultB_before), new BN(vaultA_before));
+            console.log(`Swapping ${swapAmountB.toString()} B for A. Vaults: A=${vaultA_before}, B=${vaultB_before}. Expecting ~${expectedAOut.toString()} A out.`);
+            assert.ok(expectedAOut.gt(new BN(0)), "Expected output should be positive");
+
+            await program.methods
+                .swap(swapAmountB, expectedAOut.muln(98).divn(100))
+                .accounts({
+                    userAuthority: alice.publicKey,
+                    pool: poolPda,
+                    poolAuthority: poolAuthorityPda,
+                    sourceMint: tokenBMint,
+                    destinationMint: tokenAMint,
+                    userSourceTokenAccount: aliceTokenBAccount,
+                    userDestinationTokenAccount: aliceTokenAAccount,
+                    tokenAVault: poolTokenAVault,
+                    tokenBVault: poolTokenBVault,
+                    tokenProgram: TOKEN_PROGRAM_ID
+                } as any)
+                .signers([alice])
+                .rpc()
+
+            const aliceA_after = await getTokenBalance(aliceTokenAAccount)
+            const aliceB_after = await getTokenBalance(aliceTokenBAccount)
+            const vaultA_after = await getTokenBalance(poolTokenAVault)
+            const vaultB_after = await getTokenBalance(poolTokenBVault)
+
+            const actualAmountOutA = aliceA_after - aliceA_before;
+            assert.equal(aliceB_before - aliceB_after, swapAmountB.toNumber(), "Alice B balance change mismatch (B->A swap)");
+            // Check actual amount out is close to expected (within slippage)
+            assert.ok(new BN(actualAmountOutA).gte(expectedAOut.muln(98).divn(100)), `Amount A out too low: ${actualAmountOutA} < ~${expectedAOut.toString()}`);
+            assert.ok(new BN(actualAmountOutA).lte(expectedAOut.muln(102).divn(100)), `Amount A out too high: ${actualAmountOutA} > ~${expectedAOut.toString()}`);
+
+            assert.equal(vaultA_before - vaultA_after, actualAmountOutA, "Vault A balance change mismatch (B->A swap)");
+            assert.equal(vaultB_after - vaultB_before, swapAmountB.toNumber(), "Vault B balance change mismatch (B->A swap)");
+
+        });
+
+        it("Fails swap with zero amount in", async () => {
+            try {
+                await program.methods
+                    .swap(new BN(0), mintAmountBOut)
+                    .accounts({
+                        userAuthority: alice.publicKey,
+                        pool: poolPda,
+                        poolAuthority: poolAuthorityPda,
+                        sourceMint: tokenAMint,
+                        destinationMint: tokenBMint,
+                        userSourceTokenAccount: aliceTokenAAccount,
+                        userDestinationTokenAccount: aliceTokenBAccount,
+                        tokenAVault: poolTokenAVault,
+                        tokenBVault: poolTokenBVault,
+                        tokenProgram: TOKEN_PROGRAM_ID
+                    } as any)
+                    .signers([alice])
+                    .rpc();
+                assert.fail("Should have failed due to zero amount in");
+            } catch (error) {
+                assert.include(error.toString(), "ZeroAmount", "Expected ZeroAmount error")
+            }
+        });
+
+        it("Fails swap due to slippage", async () => {
+            const vaultA_before = await getTokenBalance(poolTokenAVault)
+            const vaultB_before = await getTokenBalance(poolTokenBVault)
+            const expectedBOut = calculateExpectedOut(swapAmountA, new BN(vaultA_before), new BN(vaultB_before));
+            const tooHighMInAmountOut = expectedBOut.add(new BN(1));
+
+            try {
+                await program.methods
+                    .swap(swapAmountA, tooHighMInAmountOut)
+                    .accounts({
+                        userAuthority: alice.publicKey,
+                        pool: poolPda,
+                        poolAuthority: poolAuthorityPda,
+                        sourceMint: tokenAMint,
+                        destinationMint: tokenBMint,
+                        userSourceTokenAccount: aliceTokenAAccount,
+                        userDestinationTokenAccount: aliceTokenBAccount,
+                        tokenAVault: poolTokenAVault,
+                        tokenBVault: poolTokenBVault,
+                        tokenProgram: TOKEN_PROGRAM_ID
+                    } as any)
+                    .signers([alice])
+                    .rpc();
+                assert.fail("Should have failed due to slippage");
+            } catch (error) {
+                assert.include(error.toString(), "Slippage", "Expected Slippage error")
+            }
+        });
+
+        it("Fails swap with invalid owner for source account", async () => {
+            try {
+                await program.methods
+                    .swap(swapAmountA, swapAmountB)
+                    .accountsStrict({
+                        userAuthority: bob.publicKey,
+                        pool: poolPda,
+                        poolAuthority: poolAuthorityPda,
+                        sourceMint: tokenAMint,
+                        destinationMint: tokenBMint,
+                        userSourceTokenAccount: aliceTokenAAccount,
+                        userDestinationTokenAccount: aliceTokenBAccount,
+                        tokenAVault: poolTokenAVault,
+                        tokenBVault: poolTokenBVault,
+                        tokenProgram: TOKEN_PROGRAM_ID
+                    })
+                    .signers([bob])
+                    .rpc();
+                assert.fail("Should have failed due to invalid owner");
+            } catch (error) {
+                assert.include(error.toString(), "ConstraintRaw", "Expected ConstraintRaw error")
+            }
+        });
+
+        it("Fails swap with mismatched mints (source)", async () => {
+            const wrongMint = await createMint(provider.connection, payer, mintAuthority.publicKey, null, decimals);
+            const aliceWrongTokenAccount = (await getOrCreateAssociatedTokenAccount(provider.connection, payer, wrongMint, alice.publicKey)).address;
+
+            await mintTo(provider.connection, payer, wrongMint, aliceWrongTokenAccount, mintAuthority, BigInt(100 * 10 ** decimals));
+
+            try {
+                await program.methods
+                    .swap(swapAmountA, swapAmountB)
+                    .accounts({
+                        userAuthority: alice.publicKey,
+                        pool: poolPda,
+                        poolAuthority: poolAuthorityPda,
+                        sourceMint: wrongMint,
+                        destinationMint: tokenBMint,
+                        userSourceTokenAccount: aliceWrongTokenAccount,
+                        userDestinationTokenAccount: aliceTokenBAccount,
+                        tokenAVault: poolTokenAVault,
+                        tokenBVault: poolTokenBVault,
+                        tokenProgram: TOKEN_PROGRAM_ID,
+                    } as any)
+                    .signers([alice])
+                    .rpc();
+                assert.fail("Should have failed due to invalid source mint");
 
 
+            } catch (error) {
+                assert.include(error.toString(), "ConstraintRaw", "Expected ConstraintRaw error for mint mismatch");
+
+            }
+        });
+
+        it("Fails swap with mismatched mints (destination)", async () => {
+            const wrongMint = await createMint(provider.connection, payer, mintAuthority.publicKey, null, decimals)
+            const aliceWrongTokenAccount = (await getOrCreateAssociatedTokenAccount(provider.connection, payer, wrongMint, alice.publicKey)).address;
+
+            try {
+                await program.methods
+                    .swap(swapAmountA, mintAmountBOut)
+                    .accounts({
+                        userAuthority: alice.publicKey,
+                        pool: poolPda,
+                        poolAuthority: poolAuthorityPda,
+                        sourceMint: tokenAMint,
+                        destinationMint: wrongMint,
+                        userSourceTokenAccount: aliceTokenAAccount,
+                        userDestinationTokenAccount: aliceWrongTokenAccount,
+                        tokenAVault: poolTokenAVault,
+                        tokenBVault: poolTokenBVault,
+                        tokenProgram: TOKEN_PROGRAM_ID,
+                    } as any)
+                    .signers([alice])
+                    .rpc();
+                assert.fail("Should have failed due to invalid destination mint");
+            } catch (error) {
+                assert.include(error.toString(), "ConstraintRaw", "Expected ConstraintRaw error for mint mismatch");
+            }
+        });
+    });
 })
