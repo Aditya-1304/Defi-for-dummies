@@ -232,6 +232,10 @@ describe("web3-for-dummies", () => {
     });
 
 
+    describe("intialize_pool", () => {
+        it("Initializes the liquidity pool correctly")
+    })
+
 
 
 })
