@@ -1,13 +1,152 @@
-use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token_interface::{ transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked }};
+use anchor_lang::{prelude::*, system_program};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token_interface::{ 
+        self,
+        transfer_checked, 
+        Mint, 
+        TokenAccount, 
+        TokenInterface, 
+        TransferChecked,
+        MintTo,
+        mint_to,
+        Burn,
+        burn
+     }};
+
 
 declare_id!("B53vYkHSs1vMQzofYfKjz6Unzv8P4TwCcvvTbMWVnctv");
 
 #[program]
 pub mod web3_for_dummies {
+
     use super::*;
 
-    
+    pub fn initialize_pool(ctx: Context<InitializePool>) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        pool.token_a_mint = ctx.accounts.token_a_mint.key();
+        pool.token_b_mint = ctx.accounts.token_b_mint.key();
+        pool.token_a_vault = ctx.accounts.token_a_vault.key();
+        pool.token_b_vault = ctx.accounts.token_b_vault.key();
+        pool.bump = ctx.bumps.pool;
+        pool.vault_a_bump = ctx.bumps.token_a_vault;
+        pool.vault_b_bump = ctx.bumps.token_b_vault;
+
+        msg!("Pool Initialized!");
+        msg!("Mint A: {}", pool.token_a_mint);
+        msg!("Mint B: {}", pool.token_b_mint);
+        msg!("Vault A: {}", pool.token_a_vault);
+        msg!("Vault B: {}", pool.token_b_vault);
+
+        Ok(())
+
+    }    
+
+    pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
+        let pool = &ctx.accounts.pool;
+
+        let (source_vault, source_vault_bump, dest_vault, dest_vault_bump, source_mint_decimals) =
+            if ctx.accounts.user_source_token_account.mint == pool.token_a_mint {
+                (
+                    &ctx.accounts.token_a_vault,
+                    pool.vault_a_bump,
+                    &ctx.accounts.token_b_vault,
+                    pool.vault_b_bump,
+                    ctx.accounts.token_a_mint.decimals,
+                )
+            } else if ctx.accounts.user_source_token_account.mint == pool.token_b_mint {
+                (
+                    &ctx.accounts.token_b_vault,
+                    pool.vault_b_bump,
+                    &ctx.accounts.token_a_vault,
+                    pool.vault_a_bump,
+                    ctx.accounts.token_b_mint.decimals,
+                )
+            } else {
+                return err!(SwapError::InvalidDestinationMint)
+            };
+
+            if ctx.accounts.user_destination_token_account.mint != dest_vault.mint {
+                return err!(SwapError::InvalidDestinationMint);
+            }
+
+            source_vault.reload()?;
+            dest_vault.reload()?;
+            let reserve_in = source_vault.amount;
+            let reserve_out = dest_vault.amount;
+
+
+            let amount_in_u128 = amount_in as u128;
+            let reserve_in_u128 = reserve_in as u128;
+            let reserve_out_u128 = reserve_out as u128;
+
+            if reserve_in == 0 || reserve_out == 0 {
+                return  err!(SwapError::PoolIsEmpty);
+            }
+            if amount_in == 0 {
+                return err!(SwapError::ZeroAmount)
+            }
+
+            let constant_product = reserve_in_u128.checked_mul(reserve_out_u128).ok_or(SwapError::CalculationOverflow)?;
+
+            let new_reserve_in = reserve_in_u128.checked_add(amount_in_u128).ok_or(SwapError::CalculationOverflow);
+
+            let new_reserve_out = constant_product.checked_div(new_reserve_in).ok_or(SwapError::CalculationOverflow)?;
+
+            let amount_out_u128 = reserve_out_u128.checked_sub(new_reserve_out).ok_or(SwapError::CalculationOverflow)?;
+
+            let amount_out = amount_out_u128 as u64;
+
+            if amount_out < min_amount_out {
+                return err!(SwapError::SlippageExceeded);
+            }
+
+            let transfer_in_accounts = TransferChecked {
+                from: ctx.accounts.user_source_token_account.to_account_info(),
+                mint: ctx.accounts.source_mint.to_account_info(),
+                to: source_vault.to_account_info(),
+                authority: ctx.accounts.user_authority.to_account_info(),
+            };
+
+            let transfer_in_cpi = CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                transfer_in_accounts,
+            );
+            transfer_checked(transfer_in_cpi,amount_in, source_mint_decimals);
+
+
+            let pool_signer_seeds : &[&[&[u8]]] = &[&[
+                b"pool",
+                pool.token_a_mint.as_ref(),
+                pool.token_b_mint.as_ref(),
+                &[pool.bump]
+            ]];
+        
+            let transfer_out_accounts = TransferChecked {
+                from: dest_vault.to_account_info(),
+                mint: ctx.accounts.destination_mint.to_account_info(),
+                to: ctx.accounts.user_destination_token_account.to_account_info(),
+                authority: ctx.accounts.pool_authority.to_account_info(),
+            };
+
+            let transfer_out_cpi = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                transfer_out_accounts,
+                pool_signer_seeds,
+            );
+
+            transfer_checked(transfer_out_cpi, amount_out, dest_vault.decimals)?;
+
+            emit!(SwapEvent {
+                pool: ctx.accounts.pool.key(),
+                user: ctx.accounts.user_authority.key(),
+                amount_in,
+                amount_out,
+                source_mint: ctx.accounts.source_mint.key(),
+                destination_mint: ctx.accounts.destination_mint.key()
+            });
+        Ok(())
+    }
 
     pub fn process_transaction(ctx: Context<ProcessTransaction>, amount: u64) -> Result<()> {
         let cpi_accounts = TransferChecked {
