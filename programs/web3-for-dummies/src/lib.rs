@@ -36,11 +36,30 @@ pub mod web3_for_dummies {
         // Get mutable access to the newly created pool account
         let pool = &mut ctx.accounts.pool;
 
+        let (smaller_mint, larger_mint) = if ctx.accounts.token_a_mint.key() < ctx.accounts.token_b_mint.key() {
+            (ctx.accounts.token_a_mint.key(), ctx.accounts.token_b_mint.key())
+            
+        } else {
+            (ctx.accounts.token_b_mint.key(), ctx.accounts.token_a_mint.key())            
+
+        };
+
+        pool.token_a_mint = smaller_mint;
+
+        pool.token_b_mint = larger_mint;
+
+        if ctx.accounts.token_a_mint.key() == smaller_mint {
+            pool.token_a_vault = ctx.accounts.token_a_vault.key();
+            pool.token_b_vault = ctx.accounts.token_b_vault.key();
+        }else {
+            pool.token_a_vault = ctx.accounts.token_b_vault.key();
+            pool.token_b_vault = ctx.accounts.token_a_vault.key();
+        }
         // Store the public keys of the token mints and vaults in the pool state
-        pool.token_a_mint = ctx.accounts.token_a_mint.key();
-        pool.token_b_mint = ctx.accounts.token_b_mint.key();
-        pool.token_a_vault = ctx.accounts.token_a_vault.key();
-        pool.token_b_vault = ctx.accounts.token_b_vault.key();
+        // pool.token_a_mint = ctx.accounts.token_a_mint.key();
+        // pool.token_b_mint = ctx.accounts.token_b_mint.key();
+        // pool.token_a_vault = ctx.accounts.token_a_vault.key();
+        // pool.token_b_vault = ctx.accounts.token_b_vault.key();
         // Store the bump seed for the pool's PDA, needed for signing CPIs later
         // Use the bump specific to the 'pool' account derivation
         pool.bump = ctx.bumps.pool; // Anchor still provides the bump used for init
