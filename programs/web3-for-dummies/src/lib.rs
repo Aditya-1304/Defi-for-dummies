@@ -36,13 +36,33 @@ pub mod web3_for_dummies {
         // Get mutable access to the newly created pool account
         let pool = &mut ctx.accounts.pool;
 
+        let (smaller_mint, larger_mint) = if ctx.accounts.token_a_mint.key() < ctx.accounts.token_b_mint.key() {
+            (ctx.accounts.token_a_mint.key(), ctx.accounts.token_b_mint.key())
+            
+        } else {
+            (ctx.accounts.token_b_mint.key(), ctx.accounts.token_a_mint.key())            
+
+        };
+
+        pool.token_a_mint = smaller_mint;
+
+        pool.token_b_mint = larger_mint;
+
+        if ctx.accounts.token_a_mint.key() == smaller_mint {
+            pool.token_a_vault = ctx.accounts.token_a_vault.key();
+            pool.token_b_vault = ctx.accounts.token_b_vault.key();
+        }else {
+            pool.token_a_vault = ctx.accounts.token_b_vault.key();
+            pool.token_b_vault = ctx.accounts.token_a_vault.key();
+        }
         // Store the public keys of the token mints and vaults in the pool state
-        pool.token_a_mint = ctx.accounts.token_a_mint.key();
-        pool.token_b_mint = ctx.accounts.token_b_mint.key();
-        pool.token_a_vault = ctx.accounts.token_a_vault.key();
-        pool.token_b_vault = ctx.accounts.token_b_vault.key();
+        // pool.token_a_mint = ctx.accounts.token_a_mint.key();
+        // pool.token_b_mint = ctx.accounts.token_b_mint.key();
+        // pool.token_a_vault = ctx.accounts.token_a_vault.key();
+        // pool.token_b_vault = ctx.accounts.token_b_vault.key();
         // Store the bump seed for the pool's PDA, needed for signing CPIs later
-        pool.bump = ctx.bumps.pool;
+        // Use the bump specific to the 'pool' account derivation
+        pool.bump = ctx.bumps.pool; // Anchor still provides the bump used for init
 
         // Log the details of the initialized pool (useful for debugging)
         msg!("Pool Initialized!");
@@ -50,6 +70,8 @@ pub mod web3_for_dummies {
         msg!("Mint B: {}", pool.token_b_mint);
         msg!("Vault A: {}", pool.token_a_vault);
         msg!("Vault B: {}", pool.token_b_vault);
+        msg!("Pool Bump: {}", pool.bump);
+
 
         Ok(()) // Indicate successful execution
     }
@@ -62,58 +84,50 @@ pub mod web3_for_dummies {
 
         // --- Input Validation ---
         // Ensure the user's source token account mint matches one of the pool's tokens
+        // This check is partially redundant due to constraints but good for clarity
         if ctx.accounts.user_source_token_account.mint != pool.token_a_mint && ctx.accounts.user_source_token_account.mint != pool.token_b_mint {
             return err!(SwapError::InvalidMint);
         }
+
+        
 
         // --- Determine Source/Destination Vaults ---
         // Figure out which pool vault receives tokens (source) and which sends tokens (destination)
         // based on the mint of the user's source token account.
         // Also retrieve the decimals of the source mint for transfer_checked.
-        let (source_vault_key, dest_vault_key, source_mint_decimals) = {
+        let (source_vault_account, dest_vault_account, source_mint_decimals) = {
             if ctx.accounts.user_source_token_account.mint == pool.token_a_mint {
                 // User is sending Token A, wants Token B
                 (
-                    ctx.accounts.token_a_vault.key(), // Pool's vault A is the source
-                    ctx.accounts.token_b_vault.key(), // Pool's vault B is the destination
+                    &mut ctx.accounts.token_a_vault, // Pool's vault A is the source
+                    &mut ctx.accounts.token_b_vault, // Pool's vault B is the destination
                     ctx.accounts.source_mint.decimals, // Decimals of Token A
                 )
             } else {
                 // User is sending Token B, wants Token A (since we already validated the mint)
                 (
-                    ctx.accounts.token_b_vault.key(), // Pool's vault B is the source
-                    ctx.accounts.token_a_vault.key(), // Pool's vault A is the destination
+                    &mut ctx.accounts.token_b_vault, // Pool's vault B is the source
+                    &mut ctx.accounts.token_a_vault, // Pool's vault A is the destination
                     ctx.accounts.source_mint.decimals, // Decimals of Token B
                 )
             }
         };
 
-        // --- Get Mutable Vault References ---
-        // Borrow the vault accounts mutably from the context
-        let token_a_vault_mut = &mut ctx.accounts.token_a_vault;
-        let token_b_vault_mut = &mut ctx.accounts.token_b_vault;
-
-        // Assign the correct mutable references based on the keys determined above
-        let (final_source_vault, final_dest_vault) = if token_a_vault_mut.key() == source_vault_key {
-            // token_a_vault is the source vault
-            (token_a_vault_mut, token_b_vault_mut)
-        } else {
-            // token_b_vault is the source vault, swap the references
-            (token_b_vault_mut, token_a_vault_mut)
-        };
 
         // --- Destination Mint Check ---
         // Ensure the user's destination token account matches the mint of the pool's destination vault
-        if ctx.accounts.user_destination_token_account.mint != final_dest_vault.mint {
+        // This check is partially redundant due to constraints but good for clarity
+        if ctx.accounts.user_destination_token_account.mint != dest_vault_account.mint {
             return err!(SwapError::InvalidDestinationMint);
         }
 
         // --- Get Reserves ---
         // Reload vault accounts to get the latest balance data on-chain
-        final_source_vault.reload()?;
-        final_dest_vault.reload()?;
-        let reserve_in = final_source_vault.amount; // Current balance of the token being sent *in*
-        let reserve_out = final_dest_vault.amount; // Current balance of the token being sent *out*
+        // It's crucial to reload *before* calculations to prevent race conditions.
+        source_vault_account.reload()?;
+        dest_vault_account.reload()?;
+        let reserve_in = source_vault_account.amount; // Current balance of the token being sent *in*
+        let reserve_out = dest_vault_account.amount; // Current balance of the token being sent *out*
 
         // --- Swap Calculation (Constant Product: x * y = k) ---
         // Convert amounts to u128 for calculation to prevent intermediate overflows
@@ -128,6 +142,17 @@ pub mod web3_for_dummies {
         if amount_in == 0 {
             return err!(SwapError::ZeroAmount); // Input amount must be positive
         }
+
+        let fee_numerator = 3;
+        let fee_denomiantor = 1000;
+        let amount_in_after_fee = amount_in_u128
+            .checked_mul(fee_denomiantor - fee_numerator)
+            .ok_or(SwapError::CalculationOverflow)?
+            .checked_div(fee_denomiantor)
+            .ok_or(SwapError::CalculationOverflow)?;
+
+        let constant_product = reserve_in_u128.checked_mul(reserve_out_u128).ok_or(SwapError::CalculationOverflow)?;
+        let new_reserve_in = reserve_in_u128.checked_add(amount_in_after_fee).ok_or(SwapError::CalculationOverflow)?;
 
         // Calculate the constant product (k)
         // x * y = k
@@ -155,13 +180,24 @@ pub mod web3_for_dummies {
             return err!(SwapError::SlippageExceeded);
         }
 
+        let price_impact_bs = amount_out_u128
+        .checked_mul(10000)
+        .ok_or(SwapError::CalculationOverflow)?
+        .checked_div(reserve_out_u128)
+        .ok_or(SwapError::CalculationOverflow)?;
+
+        const MAX_PRICE_IMPACT_BPS: u128 = 1000;
+        if price_impact_bs > MAX_PRICE_IMPACT_BPS {
+            return err!(SwapError::ExcessivePriceImpact);
+        }
+
         // --- Perform Transfers via CPI ---
 
         // 1. Transfer IN: User -> Pool Source Vault
         let transfer_in_accounts = TransferChecked {
             from: ctx.accounts.user_source_token_account.to_account_info(), // User's source ATA
             mint: ctx.accounts.source_mint.to_account_info(), // Mint of the token being sent in
-            to: final_source_vault.to_account_info(), // Pool's vault for receiving the token
+            to: source_vault_account.to_account_info(), // Pool's vault for receiving the token
             authority: ctx.accounts.user_authority.to_account_info(), // User signing the transaction
         };
         let transfer_in_cpi = CpiContext::new(
@@ -174,16 +210,20 @@ pub mod web3_for_dummies {
 
         // 2. Transfer OUT: Pool Destination Vault -> User
         // Define the PDA signer seeds for the pool authority
-        let pool_signer_seeds : &[&[&[u8]]] = &[&[
-            b"pool", // Constant seed prefix
-            // Use canonical ordering of mints for deterministic PDA address
-            min(pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()),
-            max(pool.token_a_mint.as_ref(), pool.token_b_mint.as_ref()),
-            &[pool.bump] // Bump seed stored in the pool account
-        ]];
+        // Use the bump stored in the pool account state
+        let pool_bump_slice = &[pool.bump];
+        let pool_signer_seeds: &[&[u8]] = &[
+            b"pool",
+            pool.token_a_mint.as_ref(),
+            pool.token_b_mint.as_ref(),
+            pool_bump_slice
+        ];
+        // Add another layer of &[&[u8]] for the signer seeds argument
+        let signer = &[&pool_signer_seeds[..]];
+
 
         let transfer_out_accounts = TransferChecked {
-            from: final_dest_vault.to_account_info(), // Pool's vault sending the token
+            from: dest_vault_account.to_account_info(), // Pool's vault sending the token
             mint: ctx.accounts.destination_mint.to_account_info(), // Mint of the token being sent out
             to: ctx.accounts.user_destination_token_account.to_account_info(), // User's destination ATA
             authority: ctx.accounts.pool_authority.to_account_info(), // The pool's PDA authority
@@ -192,7 +232,7 @@ pub mod web3_for_dummies {
         let transfer_out_cpi = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(), // Target program (Token Program)
             transfer_out_accounts, // Accounts required by transfer_checked
-            pool_signer_seeds, // Seeds for the PDA signer
+            signer, // Pass the &[&[&[u8]]] signer seeds
         );
         // Execute the CPI
         transfer_checked(transfer_out_cpi, amount_out, ctx.accounts.destination_mint.decimals)?;
@@ -237,6 +277,80 @@ pub mod web3_for_dummies {
         });
         Ok(()) // Indicate successful execution
     }
+
+    pub fn add_liquidity(ctx: Context<AddLiquidity>, amount_a: u64, amount_b: u64) -> Result<()> {
+        if amount_a == 0 || amount_b == 0 {
+            return err!(SwapError::ZeroAmount);
+        }
+    
+        let pool = &ctx.accounts.pool;
+    
+        // Transfer token A
+        let transfer_a_accounts = TransferChecked {
+            from: ctx.accounts.user_token_a_account.to_account_info(),
+            mint: ctx.accounts.token_a_mint.to_account_info(),
+            to: ctx.accounts.token_a_vault.to_account_info(),
+            authority: ctx.accounts.user_authority.to_account_info(),
+        };
+        let transfer_a_cpi = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(), 
+            transfer_a_accounts
+        );
+        transfer_checked(transfer_a_cpi, amount_a, ctx.accounts.token_a_mint.decimals)?;
+    
+        // Transfer token B
+        let transfer_b_accounts = TransferChecked {
+            from: ctx.accounts.user_token_b_account.to_account_info(),
+            mint: ctx.accounts.token_b_mint.to_account_info(),
+            to: ctx.accounts.token_b_vault.to_account_info(),
+            authority: ctx.accounts.user_authority.to_account_info(),
+        };
+        let transfer_b_cpi = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_b_accounts,
+        );
+        transfer_checked(transfer_b_cpi, amount_b, ctx.accounts.token_b_mint.decimals)?;
+    
+        // Check for proportional deposits if pool already has liquidity
+        ctx.accounts.token_a_vault.reload()?;
+        ctx.accounts.token_b_vault.reload()?;
+        let reserve_a = ctx.accounts.token_a_vault.amount;
+        let reserve_b = ctx.accounts.token_b_vault.amount;
+    
+        // Only check proportions if we already have liquidity
+        let too_small: bool;
+        let too_large: bool;
+        
+        if reserve_a > 0 && reserve_b > 0 {
+            let expected_b = (amount_a as u128)
+                .checked_mul(reserve_b as u128)
+                .ok_or(SwapError::CalculationOverflow)?
+                .checked_div(reserve_a as u128)
+                .ok_or(SwapError::CalculationOverflow)?;
+                    
+            // Allow 1% slippage on the ratio
+            let min_expected_b = expected_b.saturating_mul(99).checked_div(100).unwrap_or(0);
+            let max_expected_b = expected_b.saturating_mul(101).checked_div(100).unwrap_or(u128::MAX);
+
+            let amount_b_u128 = amount_b as u128;
+            
+            too_small = amount_b_u128 < min_expected_b;
+            too_large = amount_b_u128 > max_expected_b;
+            
+            if too_small || too_large {
+                return err!(SwapError::DisproportionateLiquidity);
+            }
+        }
+    
+        emit!(LiquidityAddedEvent {
+            pool: pool.key(),
+            user: ctx.accounts.user_authority.key(),
+            amount_a,
+            amount_b,
+        });
+    
+        Ok(())
+    }
 }
 
 
@@ -256,67 +370,59 @@ pub struct LiquidityPool {
     pub token_b_vault: Pubkey,
     /// The bump seed used for the pool's PDA.
     pub bump: u8,
-    // pub vault_a_bump: u8, // Bumps for vaults are not needed if using ATAs with PDA authority
-    // pub vault_b_bump: u8,
 }
 
 /// Define the space required for the LiquidityPool account.
-/// 8 bytes for discriminator + 4 * 32 bytes for Pubkeys + 1 byte for bump = 137 bytes.
-/// Add a buffer (e.g., 64 bytes) for potential future fields.
 const POOL_ACCOUNT_SIZE: usize = 8 + ( 32 * 4 ) + 1 + 64; // = 201 bytes
 
 /// Defines the accounts required for the `initialize_pool` instruction.
 #[derive(Accounts)]
 pub struct InitializePool<'info> {
+    /// The mint account for Token A. Must be passed by the client.
+    pub token_a_mint: InterfaceAccount<'info, Mint>,
+    /// The mint account for Token B. Must be passed by the client.
+    pub token_b_mint: InterfaceAccount<'info, Mint>,
+
     /// The LiquidityPool account to be created.
     #[account(
-        init, // Mark account for initialization
-        payer = initializer, // The account paying for the rent
-        seeds = [ // Seeds for the pool PDA address
+        init,
+        payer = initializer,
+        seeds = [
             b"pool",
-            // Use canonical ordering of mints for deterministic PDA address
-            min(token_a_mint.key(), token_b_mint.key()).as_ref(),
-            max(token_a_mint.key(), token_b_mint.key()).as_ref(),
+            token_a_mint.key().as_ref(),
+            token_b_mint.key().as_ref(),
         ],
-        bump, // Anchor calculates and stores the bump seed
-        space = POOL_ACCOUNT_SIZE, // Allocate space for the account
+        bump,
+        space = POOL_ACCOUNT_SIZE,
     )]
     pub pool: Account<'info, LiquidityPool>,
 
-    /// CHECK: The authority PDA for the pool. Derived from the same seeds as the pool account.
-    /// This account doesn't hold data but is required for signing transfers from vaults.
-    /// Anchor automatically validates this matches the seeds + bump.
+    /// CHECK: The authority PDA for the pool.
     #[account(
         seeds = [
             b"pool",
-            min(token_a_mint.key(), token_b_mint.key()).as_ref(),
-            max(token_a_mint.key(), token_b_mint.key()).as_ref(),
-            &[pool.bump], // Use the bump from the already derived pool account
+            token_a_mint.key().as_ref(),
+            token_b_mint.key().as_ref(),
         ],
-        bump, // Anchor validates this bump matches the derived address
+        bump,
     )]
     pub pool_authority: AccountInfo<'info>,
 
-    /// The mint account for Token A.
-    pub token_a_mint: InterfaceAccount<'info, Mint>,
-    /// The mint account for Token B.
-    pub token_b_mint: InterfaceAccount<'info, Mint>,
-
     /// The associated token account (vault) for Token A, owned by the pool_authority PDA.
     #[account(
-        init, // Initialize this ATA
+        init,
         payer = initializer,
-        associated_token::mint = token_a_mint, // Mint for the ATA
-        associated_token::authority = pool_authority, // Owner of the ATA (the PDA)
+        associated_token::mint = token_a_mint,
+        associated_token::authority = pool_authority, // Anchor ensures this authority matches the pool_authority account provided
     )]
     pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
 
     /// The associated token account (vault) for Token B, owned by the pool_authority PDA.
     #[account(
-        init, // Initialize this ATA
+        init,
         payer = initializer,
-        associated_token::mint = token_b_mint, // Mint for the ATA
-        associated_token::authority = pool_authority, // Owner of the ATA (the PDA)
+        associated_token::mint = token_b_mint,
+        associated_token::authority = pool_authority, // Anchor ensures this authority matches the pool_authority account provided
     )]
     pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
 
@@ -324,124 +430,173 @@ pub struct InitializePool<'info> {
     #[account(mut)]
     pub initializer: Signer<'info>,
 
-    /// SPL Token Program (or Token-2022 program).
+    // System Accounts
     pub token_program: Interface<'info, TokenInterface>,
-    /// Associated Token Program, needed for creating ATAs.
     pub associated_token_program: Program<'info, AssociatedToken>,
-    /// System Program, needed for creating accounts.
     pub system_program: Program<'info, System>,
 }
 
 /// Defines the accounts required for the `swap` instruction.
 #[derive(Accounts)]
 pub struct Swap<'info> {
+    /// The mint account for the token being sent *in*.
+    pub source_mint: InterfaceAccount<'info, Mint>,
+    /// The mint account for the token being sent *out*.
+    pub destination_mint: InterfaceAccount<'info, Mint>,
+
     /// The LiquidityPool account containing the state for this swap.
     #[account(
-        seeds = [ // Verify the pool PDA address matches the provided mints
-            b"pool",
-            min(source_mint.key(), destination_mint.key()).as_ref(),
-            max(source_mint.key(), destination_mint.key()).as_ref(),
-        ],
-        bump = pool.bump, // Verify the bump matches the one stored in the pool account
+        // REMOVED seeds and bump validation from here.
+        // We validate the pool implicitly through the pool_authority check and vault constraints.
         // --- Security Constraints ---
-        // Ensure the vault accounts provided match those stored in the pool state
-        constraint = token_a_vault.key() == pool.token_a_vault @SwapError::InvalidVault,
-        constraint = token_b_vault.key() == pool.token_b_vault @SwapError::InvalidVault,
-        // Ensure the pool actually supports the source and destination mints
-        constraint = (pool.token_a_mint == source_mint.key() || pool.token_a_mint == destination_mint.key()) @ SwapError::InvalidMint,
-        constraint = (pool.token_b_mint == source_mint.key() || pool.token_b_mint == destination_mint.key()) @ SwapError::InvalidMint,
+        // These constraints ensure the provided vaults match the addresses stored in the pool state.
+        constraint = token_a_vault.key() == pool.token_a_vault @ SwapError::InvalidVault,
+        constraint = token_b_vault.key() == pool.token_b_vault @ SwapError::InvalidVault,
+        constraint = (pool.token_a_mint == source_mint.key() && pool.token_b_mint == destination_mint.key()) || 
+                    (pool.token_a_mint == destination_mint.key() && pool.token_b_mint == source_mint.key()) 
+                    @ SwapError::InvalidMint,
     )]
     pub pool: Account<'info, LiquidityPool>,
 
-    /// CHECK: The authority PDA for the pool. Required for signing the outgoing transfer.
-    /// Anchor automatically validates this matches the seeds + bump.
+    /// CHECK: The authority PDA for the pool. Required for signing outgoing transfers.
     #[account(
         seeds = [
-            b"pool",
-            min(source_mint.key(), destination_mint.key()).as_ref(),
-            max(source_mint.key(), destination_mint.key()).as_ref(),
-            &[pool.bump],
+            b"pool", 
+            pool.token_a_mint.as_ref(),
+            pool.token_b_mint.as_ref(),
         ],
-        bump // Validate the bump
+        bump = pool.bump,
     )]
     pub pool_authority: AccountInfo<'info>,
 
     /// The user's token account for the token they are sending *in*.
     #[account(
-        mut, // Needs to be mutable because its balance decreases
-        // Ensure the user calling the instruction owns this account
+        mut,
         constraint = user_source_token_account.owner == user_authority.key() @ SwapError::InvalidOwner,
+        constraint = user_source_token_account.mint == source_mint.key() @ SwapError::InvalidMint,
     )]
     pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// The user's token account for the token they are receiving *out*.
     #[account(
-        mut, // Needs to be mutable because its balance increases
-        // Ensure the user calling the instruction owns this account
+        mut,
         constraint = user_destination_token_account.owner == user_authority.key() @ SwapError::InvalidOwner,
+        constraint = user_destination_token_account.mint == destination_mint.key() @ SwapError::InvalidMint,
     )]
     pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// The pool's vault for Token A.
+    /// The pool's vault for Token A. Needs to be mutable for balance changes.
     #[account(
-        mut, // Needs to be mutable for `reload()` and potentially receiving/sending tokens
-        // Ensure the vault's mint matches one of the swap tokens
-        constraint = (token_a_vault.mint == source_mint.key() || token_a_vault.mint == destination_mint.key()) @ SwapError::InvalidMint,
+        mut,
+        // Constraint to ensure this vault belongs to the validated pool authority PDA.
+        constraint = token_a_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+        // Constraint ensuring the vault's mint matches the pool state's mint A.
+        constraint = token_a_vault.mint == pool.token_a_mint @ SwapError::InvalidMint,
     )]
     pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
 
-    /// The pool's vault for Token B.
+    /// The pool's vault for Token B. Needs to be mutable for balance changes.
     #[account(
-        mut, // Needs to be mutable for `reload()` and potentially receiving/sending tokens
-        // Ensure the vault's mint matches one of the swap tokens
-        constraint = (token_b_vault.mint == source_mint.key() || token_b_vault.mint == destination_mint.key()) @ SwapError::InvalidMint,
+        mut,
+        // Constraint to ensure this vault belongs to the validated pool authority PDA.
+        constraint = token_b_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+        // Constraint ensuring the vault's mint matches the pool state's mint B.
+        constraint = token_b_vault.mint == pool.token_b_mint @ SwapError::InvalidMint,
     )]
     pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
 
-    /// The mint account for the token being sent *in*.
-    #[account(
-        // Ensure the mint address matches the user's source token account's mint
-        address = user_source_token_account.mint @ SwapError::InvalidMint,
-    )]
-    pub source_mint: InterfaceAccount<'info, Mint>,
-
-    /// The mint account for the token being sent *out*.
-    #[account(
-        // Ensure the mint address matches the user's destination token account's mint
-        address = user_destination_token_account.mint @ SwapError::InvalidMint,
-    )]
-    pub destination_mint: InterfaceAccount<'info, Mint>,
-
     /// The user performing the swap (signer).
-    #[account(mut)] // Often needs to be mutable to pay transaction fees
+    #[account(mut)]
     pub user_authority: Signer<'info>,
 
-    /// SPL Token Program (or Token-2022 program).
+    // System Accounts
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+
+#[derive(Accounts)]
+pub struct AddLiquidity<'info> {
+    #[account(
+        constraint = token_a_vault.key() == pool.token_a_vault @ SwapError::InvalidVault,
+
+        constraint = token_b_vault.key() == pool.token_b_vault @ SwapError::InvalidVault,
+    )]
+    pub pool: Account<'info, LiquidityPool>,
+
+    /// CHECK: This is the pool authority PDA that's derived deterministically.
+    #[account(
+        seeds = [
+            b"pool",
+            pool.token_a_mint.as_ref(),
+            pool.token_b_mint.as_ref(),
+        ],
+        bump = pool.bump,
+    )]
+    pub pool_authority: AccountInfo<'info>,
+
+    #[account(
+        constraint = token_a_mint.key() == pool.token_a_mint @ SwapError::InvalidMint,
+    )]
+    pub token_a_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        constraint = token_b_mint.key() == pool.token_b_mint @ SwapError::InvalidMint,
+    )]
+    pub token_b_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = user_token_a_account.owner == user_authority.key() @ SwapError::InvalidOwner,
+        constraint = user_token_a_account.mint == token_a_mint.key() @ SwapError::InvalidMint,
+    )]
+    pub user_token_a_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = user_token_b_account.owner == user_authority.key() @
+        SwapError::InvalidOwner,
+
+        constraint = user_token_b_account.mint == token_b_mint.key() @ SwapError::InvalidMint,
+    )]
+    pub user_token_b_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = token_a_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+    )]
+    pub token_a_vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = token_b_vault.owner == pool_authority.key() @ SwapError::InvalidVault,
+    )]
+    pub token_b_vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_authority: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+
 /// Defines the accounts required for the `process_transaction` instruction.
 #[derive(Accounts)]
+#[instruction(amount: u64)]
 pub struct ProcessTransaction<'info> {
+    /// The mint of the token being transferred.
+    pub sender_token_account_mint : InterfaceAccount<'info, Mint>,
+
     /// The token account sending the tokens.
     #[account(
-        mut, // Balance decreases
-        // Ensure the authority signing owns this account
+        mut,
         constraint = sender_token_account.owner == authority.key() @ SwapError::InvalidOwner,
-        // Ensure the token account's mint matches the provided mint account
         constraint = sender_token_account.mint == sender_token_account_mint.key() @ SwapError::InvalidMint,
     )]
     pub sender_token_account : InterfaceAccount<'info, TokenAccount>,
 
-    /// The mint of the token being transferred.
-    // No mut needed if only reading decimals. Address constraint moved to sender_token_account.
-    #[account(address = sender_token_account.mint @ SwapError::InvalidMint)]
-    pub sender_token_account_mint : InterfaceAccount<'info, Mint>,
-
     /// The token account receiving the tokens.
     #[account(
-        mut, // Balance increases
-        // Ensure the receiver account is for the same token type
+        mut,
         constraint = receiver_token_account.mint == sender_token_account_mint.key() @ SwapError::InvalidMint,
     )]
     pub receiver_token_account : InterfaceAccount<'info, TokenAccount>,
@@ -481,6 +636,14 @@ pub struct SwapEvent {
     pub destination_mint: Pubkey,
 }
 
+#[event]
+pub struct LiquidityAddedEvent {
+    pub pool: Pubkey,
+    pub user: Pubkey,
+    pub amount_a: u64,
+    pub amount_b: u64,
+}
+
 // --- Errors ---
 
 /// Custom errors for the swap program.
@@ -502,4 +665,8 @@ pub enum SwapError {
     InvalidVault,
     #[msg("Invalid owner of the token account.")]
     InvalidOwner,
+    #[msg("Price impact too high")]
+    ExcessivePriceImpact,
+    #[msg("Disproportionate liquidity provided")]
+    DisproportionateLiquidity,
 }
