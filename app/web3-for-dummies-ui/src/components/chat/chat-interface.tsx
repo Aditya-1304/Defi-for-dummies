@@ -16,7 +16,8 @@ import { Trash2 } from "lucide-react"
 import { ArrowDownUp } from "lucide-react";
 import { useRouter } from "next/navigation"
 import dynamic from 'next/dynamic';
-import { executeJupiterSwap, findTokenBySymbol } from "@/services/swap-service"; // <-- Add swap service functions
+import { executeSwap, getSwapQuote } from "@/services/swap-service"// <-- Add swap service functions
+import { getOrCreateToken } from "@/services/tokens-service"
 
 import { burnSpecificTokenAmount, burnTokensByMintAddress, cleanupUnwantedTokens, fetchUserTokens, saveTokenMappingsToLocalStorage } from "@/services/tokens-service"
 
@@ -369,7 +370,7 @@ export function ChatInterface() {
         } else {
           const fromTokenSymbol = parsedInstruction.fromToken ; // Default or extracted
           const toTokenSymbol = parsedInstruction.toToken  ;   // Default or extracted
-          const amount = parsedInstruction.amount ;         // Default or extracted
+          const amount = parsedInstruction.amount || 1 ;         // Default or extracted
 
           if(!fromTokenSymbol || !toTokenSymbol || !amount || amount <= 0) {
             addAIMessage("Please specify the amount and both tokens to swap (e.g., 'swap 0.1 SOL for USDC').")
@@ -380,62 +381,48 @@ export function ChatInterface() {
           addAIMessage(`Looking up tokens and preparing to swap ${amount} ${fromTokenSymbol} for ${toTokenSymbol} on ${effectiveNetwork}...`);
 
           try {
-            const inputTokenInfo = await findTokenBySymbol(fromTokenSymbol, effectiveNetwork);
-            const outputTokenInfo = await findTokenBySymbol(toTokenSymbol, effectiveNetwork);
-
-            if(!inputTokenInfo) {
-              addAIMessage(`❌ Could not find token information for ${fromTokenSymbol} on ${effectiveNetwork}.`);
-              setIsLoading(false)
-              return;
-            }
-            if(!outputTokenInfo) {
-              addAIMessage(`❌ Could not find token information for ${toTokenSymbol} on ${effectiveNetwork}.`);
-              setIsLoading(false)
-              return;
-            }
-
-            const inputMint = inputTokenInfo.address;
-            const outputMint = outputTokenInfo.address;
-            const inputDeciamals = inputTokenInfo.decimals;
-
-            const amountInSmallestUnit = Math.round(amount * Math.pow(10, inputDeciamals));
-
-            addAIMessage(`Attempting swap via Jupiter...`);
-
-            const result = await executeJupiterSwap(
+            const quote = await getSwapQuote(
               connection,
+              fromTokenSymbol,
+              toTokenSymbol,
+              amount,
               wallet,
-              inputMint,
-              outputMint,
-              amountInSmallestUnit,
-              100,
-              effectiveNetwork
+              effectiveNetwork as "localnet" | "devnet" | "mainnet"
+            );
+            if (!quote.success) {
+              addAIMessage(`❌ ${quote.message || "Could not get a price quote for this swap."}`);
+              setIsLoading(false);
+              return;
+            }
+
+            addAIMessage(
+              `Found a swap route: ${amount} ${fromTokenSymbol} -> ~${quote.expectedOutputAmount.toFixed(6)} ${toTokenSymbol}. Executing swap...`
             );
 
-            if (result && result.success) {
-              const explorerUrl = result.signature ? getExplorerLink(result.signature, effectiveNetwork) : null;
+            const result = await executeSwap(
+              connection,
+              wallet,
+              fromTokenSymbol,
+              toTokenSymbol,
+              amount,
+              50,
+              effectiveNetwork as "localnet"| "devnet" | "mainnet"
+            );
 
-              const displayInputAmount = result.inputAmount?.toFixed(6) || amount.toFixed(6);
-
-              const displayOutputAmount = result.outputAmount?.toFixed(6) || '';
+            if(result && result.success) {
+              const explorerUrl = result.explorerUrl || "";
+              const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
 
               addAIMessage(
-                `✅ Successfully swapped ~${displayInputAmount} ${fromTokenSymbol} for ~${displayOutputAmount} ${toTokenSymbol}.\n\n` +
-                `${explorerUrl ? `View transaction in [Solana Explorer](${explorerUrl})` : ''}`
-              );
+                `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` + 
+                `View transaction in [Solana Explorer](${explorerUrl})` 
+              )
             } else {
-              addAIMessage(`❌ Swap failed: ${result?.message || "Unknown error during swap."}`);
-              console.error("Swap failure details:", result);
+              addAIMessage(`❌ Swap Failed: ${result?.message || "Unknown error during swap."}`)
             }
           } catch (err: any) {
             console.error("Swap execution error:", err);
-            if(err.message.includes("Could not find token information")) {
-              addAIMessage(`❌ Error: ${err.message}`);
-            } else if (err.message.includes("Jupiter API error")) {
-               addAIMessage(`❌ Jupiter API Error: ${err.message}. Could not get swap routes.`);
-            } else {
-               addAIMessage(`❌ Swap error: ${err.message}`);
-            }
+            addAIMessage(`❌ Swap error: ${err.message}`)
           }
         }
         setIsLoading(false);

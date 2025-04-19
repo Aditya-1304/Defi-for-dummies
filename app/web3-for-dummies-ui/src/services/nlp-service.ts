@@ -249,6 +249,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap tokens': {
@@ -256,6 +257,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'token swap': {
@@ -263,6 +265,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap sol for usdc': {
@@ -304,6 +307,14 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     token: '$2',
     amount: 1,
     recipient: '$4',
+    confidence: 1.0,
+  },
+  'exchange tokens': {
+    isPayment: false,
+    isSwapRequest: true,
+    fromToken: '',
+    toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
 };
@@ -655,6 +666,38 @@ function parseWithRegex(message: string): PaymentInstruction {
 
   if (!hasPaymentKeyword) {
     return { isPayment: false, confidence: 0.9 };
+  }
+
+  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
+  const swapMatch = lowerMessage.match(swapRegex);
+
+  if (swapMatch) {
+    const amount = parseFloat(swapMatch[1]);
+    const fromToken = swapMatch[2].toUpperCase();
+    const toToken = swapMatch[3].toUpperCase();
+
+    console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      amount,
+      fromToken,
+      toToken,
+      network,
+      confidence: 0.95
+    };
+  }
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
   // Pattern for "send X [TOKEN] to [ADDRESS]"
   // Improved regex that's more flexible with formatting
