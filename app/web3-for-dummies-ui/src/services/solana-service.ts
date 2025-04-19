@@ -2103,7 +2103,15 @@ export async function executePoolSwap(
 
 
     const transaction = new Transaction();
-    const destinationAccountInfo = await getAssociatedTokenAddress(fromMint, wallet.publicKey);
+    // const destinationAccountInfo = await getAssociatedTokenAddress(fromMint, wallet.publicKey);
+    let destinationAccountInfo;
+    try {
+      destinationAccountInfo = await connection.getAccountInfo(userDestinationTokenAccount);
+    } catch (e) {
+      if (!(e instanceof Error && (e.message.includes("could not find account") || e.message.includes("Account does not exists")))) {
+        console.error("Error checking destination ATA:", e);
+      }
+    }
     if (!destinationAccountInfo) {
       console.log("Destination ATA not found, creating...")
       transaction.add(

@@ -1,210 +1,265 @@
-import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { QuoteGetRequest, QuoteResponse, SwapMode } from '@jup-ag/api';
-import { WalletContextState } from "@solana/wallet-adapter-react";
+import { Connection, PublicKey } from '@solana/web3.js';
+import { BN } from "@coral-xyz/anchor"
+import { WalletContextState } from '@solana/wallet-adapter-react';
+import { getOrCreateToken } from './tokens-service';
+import { executePoolSwap } from './solana-service';
 
-interface SwapResponse {
-  swapTransaction: string; // base64 encoded transaction
-  lastValidBlockHeight?: number;
-  prioritizationFeeLamports?: number;
-}
+export { executePoolSwap } from './solana-service';
 
-const JUPITER_API_URL = {
-  'mainnet': 'https://quote-api.jup.ag/v6',
-  'devnet': 'https://quote-api.jup.ag/v6/?cluster=devnet',
-  'localnet': 'https://quote-api.jup.ag/v6/?cluster=devnet'
-};
 
-let tokenListCache: any[] = [];
+export function calculateExpectedOutput(
+  amountIn: number,
+  reserveIn: number,
+  reserveOut: number,
+  inputDecimals: number,
+  outputDecimals: number,
+): { outputAmount: number, minOutputAmount: number, priceImpactBps: number } {
+  const amountInRaw = new BN(Math.floor(amountIn * Math.pow(10, inputDecimals)));
+  const reserveInRaw = new BN(reserveIn);
+  const reserveOutRaw = new BN(reserveOut);
 
-export async function getJupiterTokens(networkType: 'mainnet' | "devnet" | "localnet" = "localnet") {
-  if (tokenListCache.length > 0) {
-    return tokenListCache;
+  const amountInU128 = BigInt(amountInRaw.toString());
+  const reserveInU128 = BigInt(reserveInRaw.toString());
+  const reserveOutU128 = BigInt(reserveOutRaw.toString());
+
+  if (reserveInU128 === BigInt(0) || reserveOutU128 === BigInt(0) || amountInU128 === BigInt(0)) {
+    return {
+      outputAmount: 0,
+      minOutputAmount: 0,
+      priceImpactBps: 0,
+    };
   }
 
-  try {
-    const effectiveNetwork = networkType === "localnet" ? "devnet" : networkType;
-    const apiUrl = effectiveNetwork === "mainnet" ? "https://token.jup.ag/all" : 'https://token.jup.ag/all?cluster=devnet'
+  const feeNumerator = BigInt(3);
+  const feeDenominator = BigInt(1000);
+  const amountInAfterFee = (amountInU128 * (feeDenominator - feeNumerator)) / feeDenominator;
 
-    const response = await fetch(apiUrl)
-    const { tokens } = await response.json();
-    tokenListCache = tokens;
-    return tokens;
-  } catch (error) {
-    console.error("Error fetching token list:", error);
-    return [];
+  const constantProduct = reserveInU128 * reserveOutU128;
+  const newReserveIn = reserveInU128 + amountInAfterFee;
+  const newReserveOut = constantProduct / newReserveIn;
+  const amountOutU128 = reserveOutU128 > newReserveOut ? reserveOutU128 - newReserveOut : BigInt(0);
+
+
+  const priceImpactBps = Number(
+    (amountOutU128 * BigInt(10000)) / reserveOutU128
+  );
+
+  const outputAmount = Number(amountOutU128) / Math.pow(10, outputDecimals);
+
+  const minOutputAmount = outputAmount * 0.995;
+
+  return {
+    outputAmount,
+    minOutputAmount,
+    priceImpactBps,
   }
 
 }
 
-
-export async function findTokenBySymbol(symbol: string, networkType: 'mainnet' | "devnet" | "localnet" = "localnet") {
-  const tokens = await getJupiterTokens(networkType);
-  return tokens.find((t: any) => t.symbol.toUpperCase() === symbol.toUpperCase());
-}
-
-export async function getSwapRoutes(
+export async function getSwapQuote(
   connection: Connection,
-  inputMint: string,
-  outputMint: string,
-  amount: number,
-  slippageBps: number = 100,
+  fromTokenSymbol: string,
+  toTokenSymbol: string,
+  amountIn: number,
+  wallet: WalletContextState,
   network: "localnet" | "devnet" | "mainnet" = "localnet",
-): Promise<QuoteResponse | null> {
+): Promise<{
+  fromToken: {
+    symbol: string,
+    decimals: number,
+    mint: string,
+  },
+  toToken: {
+    symbol: string,
+    decimals: number,
+    mint: string,
+  },
+  inputAmount: number,
+  expectedOutputAmount: number,
+  minOutputAmount: number,
+  priceImpactBps: number,
+  success: boolean,
+  message?: string,
+}> {
   try {
-    const effectiveNetwork = network === "localnet" ? "devnet" : network;
-    const apiUrl = JUPITER_API_URL[effectiveNetwork];
+    console.log(` Getting swap quote: ${amountIn} ${fromTokenSymbol} -> ${toTokenSymbol}`);
 
-    const params: QuoteGetRequest = {
-      inputMint,
-      outputMint,
-      amount: amount,
-      slippageBps,
-      onlyDirectRoutes: false,
-      swapMode: SwapMode.ExactIn,
+    const fromTokenInfo = await getOrCreateToken(connection, wallet, fromTokenSymbol, network)
 
+    const toTokenInfo = await getOrCreateToken(connection, wallet, toTokenSymbol, network)
+
+    if (!fromTokenInfo || !toTokenInfo) {
+      return {
+        fromToken: {
+          symbol: fromTokenSymbol,
+          decimals: 0,
+          mint: ""
+        },
+        toToken: {
+          symbol: toTokenSymbol,
+          decimals: 0,
+          mint: "",
+        },
+        inputAmount: 0,
+        expectedOutputAmount: 0,
+        minOutputAmount: 0,
+        priceImpactBps: 0,
+        success: false,
+        message: "Could not find token information"
+      };
     }
 
-    const searchParams = new URLSearchParams();
 
-    // Add each parameter to the URLSearchParams, converting values to strings
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined) {
-        searchParams.append(key, String(value));
+    const program = getProgram(connection, wallet);
+
+    try {
+      const { poolPda } = await getPoolPDAs(
+        program.programId,
+        fromTokenInfo.mint,
+        toTokenInfo.mint,
+      );
+
+      const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+
+      let fromTokenVault, toTokenVault;
+
+      if ((poolAccount.tokenAMint.equals(fromTokenInfo.mint) && poolAccount.tokenBMint.equals(toTokenInfo.mint))) {
+        fromTokenVault = poolAccount.tokenAVault;
+        toTokenVault = poolAccount.tokenBVault
+      } else if ((poolAccount.tokenBMint.equals(fromTokenInfo.mint) && poolAccount.tokenAMint.equals(toTokenInfo.mint))) {
+        fromTokenVault = poolAccount.tokenBVault;
+        toTokenVault = poolAccount.tokenAVault
+      } else {
+        return {
+          fromToken: {
+            symbol: fromTokenSymbol,
+            decimals: fromTokenInfo.decimals,
+            mint: fromTokenInfo.mint.toString(),
+          },
+          toToken: {
+            symbol: toTokenSymbol,
+            decimals: toTokenInfo.decimals,
+            mint: toTokenInfo.mint.toString(),
+          },
+          inputAmount: amountIn,
+          expectedOutputAmount: 0,
+          minOutputAmount: 0,
+          priceImpactBps: 0,
+          success: false,
+          message: "Pool not found for token pair"
+        };
       }
+
+      const fromVaultBalance = await connection.getTokenAccountBalance(fromTokenVault).then(res => Number(res.value.amount));
+
+      const toVaultBalance = await connection.getTokenAccountBalance(toTokenVault).then(res => Number(res.value.amount));
+
+      const { outputAmount, minOutputAmount, priceImpactBps } = calculateExpectedOutput(
+        amountIn,
+        fromVaultBalance,
+        toVaultBalance,
+        fromTokenInfo.decimals,
+        toTokenInfo.decimals
+      );
+
+      return {
+        fromToken: {
+          symbol: fromTokenSymbol,
+          decimals: fromTokenInfo.decimals,
+          mint: fromTokenInfo.mint.toString(),
+        },
+        toToken: {
+          symbol: toTokenSymbol,
+          decimals: toTokenInfo.decimals,
+          mint: toTokenInfo.mint.toString(),
+        },
+        inputAmount: amountIn,
+        expectedOutputAmount: outputAmount,
+        minOutputAmount,
+        priceImpactBps,
+        success: true,
+      };
+
+    } catch (error: any) {
+      console.error("Error getting swap quote:", error);
+      return {
+        fromToken: {
+          symbol: fromTokenSymbol,
+          decimals: fromTokenInfo.decimals,
+          mint: fromTokenInfo.mint.toString(),
+        },
+        toToken: {
+          symbol: toTokenSymbol,
+          decimals: toTokenInfo.decimals,
+          mint: toTokenInfo.mint.toString(),
+        },
+        inputAmount: amountIn,
+        expectedOutputAmount: 0,
+        minOutputAmount: 0,
+        priceImpactBps: 0,
+        success: false,
+        message: `Error calculating swap: ${error.message}`,
+      };
     }
-
-
-    const quoteUrl = `${apiUrl}/quote?${searchParams}`;
-
-    // Fetch the quote
-    const response = await fetch(quoteUrl);
-    if (!response.ok) {
-      throw new Error(`Jupiter API error: ${response.statusText}`);
-    }
-
-    const quoteResponse = await response.json() as QuoteResponse;
-    return quoteResponse;
   } catch (error: any) {
-    console.error("Error getting swap routes:", error)
-    return null;
+    console.error("Failed to get swap quote:", error);
+    return {
+      fromToken: {
+        symbol: fromTokenSymbol,
+        decimals: 0,
+        mint: "",
+      },
+      toToken: {
+        symbol: toTokenSymbol,
+        decimals: 0,
+        mint: "",
+      },
+      inputAmount: 0,
+      expectedOutputAmount: 0,
+      minOutputAmount: 0,
+      priceImpactBps: 0,
+      success: false,
+      message: `Failed to get swap quote: ${error.message}`
+    }
   }
 }
 
-export async function executeJupiterSwap(
+
+export async function executeSwap(
   connection: Connection,
   wallet: WalletContextState,
-  inputMint: string,
-  outputMint: string,
-  amount: number,
-  slippageBps: number = 100,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  fromTokenSymbol: string,
+  toTokenSymbol: string,
+  amountIn: number,
+  slippageBps: number = 50,
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+
 ): Promise<{
   success: boolean;
-  message: string;
+  message?: string;
   signature?: string;
   explorerUrl?: string;
   inputAmount?: number;
   outputAmount?: number;
   error?: any;
 }> {
-  try {
-    if (!wallet.publicKey) {
-      return {
-        success: false,
-        message: "wallet not connected"
-      }
-    };
+  return executePoolSwap(
+    connection,
+    wallet,
+    fromTokenSymbol,
+    toTokenSymbol,
+    amountIn,
+    slippageBps,
+    network,
+  );
+}
 
-    const effectiveNetwork = network === "localnet" ? "devnet" : network;
+function getProgram(connection: Connection, wallet: any) {
+  const { getProgram } = require('./solana-service');
+  return getProgram(connection, wallet);
+}
 
-    if (network === 'localnet') {
-      console.warn("Note: Jupiter doesn't support localnet directly. Using ")
-    }
-
-    const quoteResponse = await getSwapRoutes(
-      connection,
-      inputMint,
-      outputMint,
-      amount,
-      slippageBps,
-      effectiveNetwork
-    );
-
-    if (!quoteResponse) {
-      return {
-        success: false,
-        message: "Failed to get quote for swap"
-      };
-    }
-
-    // Get input and output token information
-    const inputToken = await findTokenBySymbol(quoteResponse.inputMint, network);
-    const outputToken = await findTokenBySymbol(quoteResponse.outputMint, network);
-
-    const inputTokenDecimals = inputToken?.decimals || 9;
-    const outputTokenDecimals = outputToken?.decimals || 9;
-
-    const inputAmount = parseFloat(quoteResponse.inAmount) / Math.pow(10, inputTokenDecimals);
-    const outputAmount = parseFloat(quoteResponse.outAmount) / Math.pow(10, outputTokenDecimals);
-
-    const apiUrl = JUPITER_API_URL[network];
-    const swapUrl = `${apiUrl}/swap`;
-
-    const swapPayload = {
-      quoteResponse,
-      userPublicKey: wallet.publicKey.toString(),
-      wrapAndUnwrapSol: true,
-    }
-
-    const swapResponse = await fetch(swapUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(swapPayload)
-    });
-
-    if (!swapResponse.ok) {
-      throw new Error(`Jupiter swap API error: ${swapResponse.statusText}`)
-    }
-
-    const swapResult = await swapResponse.json() as SwapResponse;
-
-    const { swapTransaction } = swapResult;
-
-    const serializedTransaction = Buffer.from(swapTransaction, 'base64');
-    const versionedTransaction = VersionedTransaction.deserialize(serializedTransaction);
-
-    if (wallet.signTransaction) {
-      const signedTransaction = await wallet.signTransaction(versionedTransaction)
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize());
-
-      await connection.confirmTransaction(signature, 'processed')
-
-      const explorerUrl = network === 'mainnet' ?
-        `https://explorer.solana.com/tx/${signature}`
-        : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-
-
-      return {
-        success: true,
-        signature,
-        explorerUrl,
-        inputAmount,
-        outputAmount,
-        message: `Successfully swapped ${inputAmount.toFixed(6)} ${inputToken?.symbol || 'tokens'} for ${outputToken?.symbol || 'tokens'}`,
-
-      }
-    } else {
-      throw new Error("Wallet does not support signing transcations")
-    }
-
-  } catch (error: any) {
-    console.error("Error executing Jupiter swap:", error);
-    return {
-      success: false,
-      error,
-      message: `Failed to execute swap: ${error.message}`
-    };
-  }
+async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey) {
+  const { getPoolPDAs } = require('./solana-service');
+  return getPoolPDAs(programId, mintA, mintB)
 }
