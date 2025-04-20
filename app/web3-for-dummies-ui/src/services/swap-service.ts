@@ -80,6 +80,7 @@ export async function getSwapQuote(
   priceImpactBps: number,
   success: boolean,
   message?: string,
+  needsPoolCreation?: boolean,
 }> {
   try {
     console.log(` Getting swap quote: ${amountIn} ${fromTokenSymbol} -> ${toTokenSymbol}`);
@@ -118,18 +119,51 @@ export async function getSwapQuote(
         fromTokenInfo.mint,
         toTokenInfo.mint,
       );
+      try {
 
-      const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+        const poolAccount = await program.account.liquidityPool.fetch(poolPda);
 
-      let fromTokenVault, toTokenVault;
+        let fromTokenVault, toTokenVault;
 
-      if ((poolAccount.tokenAMint.equals(fromTokenInfo.mint) && poolAccount.tokenBMint.equals(toTokenInfo.mint))) {
-        fromTokenVault = poolAccount.tokenAVault;
-        toTokenVault = poolAccount.tokenBVault
-      } else if ((poolAccount.tokenBMint.equals(fromTokenInfo.mint) && poolAccount.tokenAMint.equals(toTokenInfo.mint))) {
-        fromTokenVault = poolAccount.tokenBVault;
-        toTokenVault = poolAccount.tokenAVault
-      } else {
+        if ((poolAccount.tokenAMint.equals(fromTokenInfo.mint) && poolAccount.tokenBMint.equals(toTokenInfo.mint))) {
+          fromTokenVault = poolAccount.tokenAVault;
+          toTokenVault = poolAccount.tokenBVault
+        } else if ((poolAccount.tokenBMint.equals(fromTokenInfo.mint) && poolAccount.tokenAMint.equals(toTokenInfo.mint))) {
+          fromTokenVault = poolAccount.tokenBVault;
+          toTokenVault = poolAccount.tokenAVault
+        } else {
+          return {
+            fromToken: {
+              symbol: fromTokenSymbol,
+              decimals: fromTokenInfo.decimals,
+              mint: fromTokenInfo.mint.toString(),
+            },
+            toToken: {
+              symbol: toTokenSymbol,
+              decimals: toTokenInfo.decimals,
+              mint: toTokenInfo.mint.toString(),
+            },
+            inputAmount: amountIn,
+            expectedOutputAmount: 0,
+            minOutputAmount: 0,
+            priceImpactBps: 0,
+            success: false,
+            message: "Pool not found for token pair"
+          };
+        }
+
+        const fromVaultBalance = await connection.getTokenAccountBalance(fromTokenVault).then(res => Number(res.value.amount));
+
+        const toVaultBalance = await connection.getTokenAccountBalance(toTokenVault).then(res => Number(res.value.amount));
+
+        const { outputAmount, minOutputAmount, priceImpactBps } = calculateExpectedOutput(
+          amountIn,
+          fromVaultBalance,
+          toVaultBalance,
+          fromTokenInfo.decimals,
+          toTokenInfo.decimals
+        );
+
         return {
           fromToken: {
             symbol: fromTokenSymbol,
@@ -142,43 +176,35 @@ export async function getSwapQuote(
             mint: toTokenInfo.mint.toString(),
           },
           inputAmount: amountIn,
-          expectedOutputAmount: 0,
-          minOutputAmount: 0,
-          priceImpactBps: 0,
-          success: false,
-          message: "Pool not found for token pair"
+          expectedOutputAmount: outputAmount,
+          minOutputAmount,
+          priceImpactBps,
+          success: true,
         };
+      } catch (error: any) {
+        if (error.message.includes("Account does not exist") || error.message.includes("has no data")) {
+          return {
+            fromToken: {
+              symbol: fromTokenSymbol,
+              decimals: fromTokenInfo.decimals,
+              mint: fromTokenInfo.mint.toString(),
+            },
+            toToken: {
+              symbol: toTokenSymbol,
+              decimals: fromTokenInfo.decimals,
+              mint: fromTokenInfo.mint.toString(),
+            },
+            inputAmount: amountIn,
+            expectedOutputAmount: 0,
+            minOutputAmount: 0,
+            priceImpactBps: 0,
+            success: false,
+            message: `No liquidity pool exist for ${fromTokenSymbol}/${toTokenSymbol}. Would you like to create it?`,
+            needsPoolCreation: true,
+          }
+        }
+        throw error;
       }
-
-      const fromVaultBalance = await connection.getTokenAccountBalance(fromTokenVault).then(res => Number(res.value.amount));
-
-      const toVaultBalance = await connection.getTokenAccountBalance(toTokenVault).then(res => Number(res.value.amount));
-
-      const { outputAmount, minOutputAmount, priceImpactBps } = calculateExpectedOutput(
-        amountIn,
-        fromVaultBalance,
-        toVaultBalance,
-        fromTokenInfo.decimals,
-        toTokenInfo.decimals
-      );
-
-      return {
-        fromToken: {
-          symbol: fromTokenSymbol,
-          decimals: fromTokenInfo.decimals,
-          mint: fromTokenInfo.mint.toString(),
-        },
-        toToken: {
-          symbol: toTokenSymbol,
-          decimals: toTokenInfo.decimals,
-          mint: toTokenInfo.mint.toString(),
-        },
-        inputAmount: amountIn,
-        expectedOutputAmount: outputAmount,
-        minOutputAmount,
-        priceImpactBps,
-        success: true,
-      };
 
     } catch (error: any) {
       console.error("Error getting swap quote:", error);

@@ -317,6 +317,37 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     amount: 1,
     confidence: 1.0,
   },
+
+  'add liquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'addliquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'add pool': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 0.8,
+  },
 };
 
 export interface PaymentInstruction {
@@ -326,6 +357,11 @@ export interface PaymentInstruction {
   isMintRequest?: boolean;
   isTokenCleanup?: boolean;
   isSwapRequest?: boolean;
+  isAddLiquidity?: boolean;
+  tokenA?: string;
+  tokenB?: string;
+  amountA?: number;
+  amountB?: number;
   cleanupTarget?: "unknown" | "all" | string[];
   burnTokens?: boolean;
   burnSpecificAmount?: boolean;
@@ -441,6 +477,13 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     11. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
     12. Mint address - for burning unknown tokens
     13. Is this a token swap request? (true/false)
+    14. Is this a add liquidity request? (true/false)
+    15. Is this a request to fix token names? (true/false)
+    16. Is this a request to burn tokens? (true/false)
+    17. Is this a request to remove unknown tokens? (true/false)
+    18. Is this a request to remove all tokens? (true/false)
+    19. Is this a request to remove specific tokens? (true/false)
+    20. Is this a request to burn specific tokens? (true/false)
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
 
@@ -461,6 +504,11 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - "mint 5 ADI" -> amount = 5, token = "ADI"
     - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
 
+
+    For adding liquidity to pools:
+    - "add liquidity to usdc to sol" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 1, amountB = 1
+    - "add liquidity usdc sol 5 10" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 5 , amountB = 10
+ 
    For token cleanup requests:
     - "cleanup tokens" -> isTokenCleanup = true, cleanupTarget = "unknown" (default to removing unknown tokens)
     - "remove unknown tokens" -> isTokenCleanup = true, cleanupTarget = "unknown"
@@ -508,19 +556,24 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isCompleteBalanceCheck": true/false,
       "isMintRequest": true/false,
       "isTokenCleanup": true/false,
-      "isSwapRequest": true/false, // Add this
+      "isSwapRequest": true/false,
+      "isAddLiquidity": true/false,
+      "tokenA" : "token symbol" or null,
+      "tokenB" : "token symbol" or null,
+      "amountA": number or null,
+      "amountB": number or null,
       "burnSpecificAmount": true/false,
       "burnAmount": number or null,
       "burnByMintAddress": true/false,
       "mintAddress": "address" or null,
       "listAllTokens": true/false,
-      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", // Added "all"
-      "amount": number or null, // Amount for payment, mint, burn, or swap
-      "token": "SOL" or other token name, or null, // Token for payment, balance, mint, burn
-      "fromToken": "SOL" or other token name, or null, // Add this for swap
-      "toToken": "SOL" or other token name, or null, // Add this for swap
+      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", 
+      "amount": number or null, 
+      "token": "SOL" or other token name, or null, 
+      "fromToken": "SOL" or other token name, or null,
+      "toToken": "SOL" or other token name, or null, 
       "network": "localnet" or "devnet" or "mainnet",
-      "recipient": "address" or null, // Recipient for payment
+      "recipient": "address" or null, 
       "confidence": number between 0 and 1
     }
     `;
@@ -547,6 +600,19 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isMintRequest: !!parsedResult.isMintRequest,
       isTokenCleanup: !!parsedResult.isTokenCleanup,
       isSwapRequest: !!parsedResult.isSwapRequest, // Extract swap flag
+      isAddLiquidity: !!parsedResult.isAddLiquidity,
+      tokenA: parsedResult.tokenA || undefined,
+      tokenB: parsedResult.tokenB || undefined,
+      amountA: parsedResult.amountA !== null && parsedResult.amountA !== undefined
+        ? (typeof parsedResult.amountA === 'number'
+          ? parsedResult.amountA
+          : parseFloat(String(parsedResult.amountA)))
+        : undefined,
+      amountB: parsedResult.amountB !== null && parsedResult.amountB !== undefined
+        ? (typeof parsedResult.amountB === 'number'
+          ? parsedResult.amountB
+          : parseFloat(String(parsedResult.amountB)))
+        : undefined,
       burnSpecificAmount: !!parsedResult.burnSpecificAmount,
       burnAmount: parsedResult.burnAmount || undefined,
       burnByMintAddress: !!parsedResult.burnByMintAddress,
@@ -662,6 +728,37 @@ function parseWithRegex(message: string): PaymentInstruction {
       network,
       confidence: 0.8,
     }
+  }
+
+  const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const liquidityMatch = lowerMessage.match(addLiquidityRegex);
+  if (liquidityMatch || lowerMessage.includes("addliquidity")) {
+    let tokenA = '', tokenB = '';
+    let amountA = 1, amountB = 1;
+
+    if (liquidityMatch) {
+      tokenA = liquidityMatch[1].toUpperCase();
+      tokenB = liquidityMatch[2].toUpperCase();
+
+      if (liquidityMatch[3]) {
+        amountA = parseFloat(liquidityMatch[3]);
+      }
+
+      if (liquidityMatch[4]) {
+        amountB = parseFloat(liquidityMatch[4]);
+      }
+    }
+
+    return {
+      isPayment: false,
+      isAddLiquidity: true,
+      tokenA,
+      tokenB,
+      amountA,
+      amountB,
+      network,
+      confidence: liquidityMatch ? 0.95 : 0.8
+    };
   }
 
   if (!hasPaymentKeyword) {

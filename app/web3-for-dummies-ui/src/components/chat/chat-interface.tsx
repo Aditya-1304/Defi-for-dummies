@@ -6,17 +6,19 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { motion, AnimatePresence } from "framer-motion"
-import { Ban, DatabaseZap, Send } from "lucide-react"
+import { Ban, DatabaseZap, Send, WalletMinimal } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, mintTestTokens, getAllWalletBalances } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
 import { ArrowDownUp } from "lucide-react";
 import { useRouter } from "next/navigation"
 import dynamic from 'next/dynamic';
-import { executeSwap, getSwapQuote } from "@/services/swap-service"// <-- Add swap service functions
+import { executeSwap, getSwapQuote } from "@/services/swap-service"// <-- Add swap 
+// service functions
+import { createLiquidityPool } from "@/services/solana-service"
 import { getOrCreateToken } from "@/services/tokens-service"
 
 import { burnSpecificTokenAmount, burnTokensByMintAddress, cleanupUnwantedTokens, fetchUserTokens, saveTokenMappingsToLocalStorage } from "@/services/tokens-service"
@@ -390,10 +392,36 @@ export function ChatInterface() {
               effectiveNetwork as "localnet" | "devnet" | "mainnet"
             );
             if (!quote.success) {
+
+              if(quote.needsPoolCreation) {
+                addAIMessage(`${quote.message} Creating pool now...`);
+
+                const poolResult = await createLiquidityPool(
+                  connection,
+                  wallet,
+                  fromTokenSymbol,
+                  toTokenSymbol,
+                  1000,
+                  1000,
+                  effectiveNetwork as "localnet" | "devnet" | "mainnet"
+                );
+                if (poolResult.success) {
+                  addAIMessage(
+                    `✅ ${poolResult.message}\n\n` + 
+                    `View transaction in [Solana Explorer](${poolResult.explorerUrl})\n\n` +
+                    `Try swapping again now`
+                  );
+                }else {
+                  addAIMessage(`❌ ${poolResult.message}`)
+                }
+                setIsLoading(false);
+                return;
+              } else {
               addAIMessage(`❌ ${quote.message || "Could not get a price quote for this swap."}`);
               setIsLoading(false);
               return;
             }
+          }
 
             addAIMessage(
               `Found a swap route: ${amount} ${fromTokenSymbol} -> ~${quote.expectedOutputAmount.toFixed(6)} ${toTokenSymbol}. Executing swap...`
@@ -429,6 +457,49 @@ export function ChatInterface() {
         return; // Stop further processing
       }
 
+      else if (parsedInstruction.isAddLiquidity) {
+        console.log("Handling as ADD LIQUIDITY request:", parsedInstruction);
+        if(!wallet.connected || !wallet.publicKey) {
+          addAIMessage("Please connect your wallet to add liquidity.");
+        } else {
+          const tokenA = parsedInstruction.tokenA || '';
+          const tokenB = parsedInstruction.tokenB || '';
+          const amountA = parsedInstruction.amountA || 1;
+          const amountB = parsedInstruction.amountB || 1;
+
+          if(!tokenA || !tokenB) {
+            addAIMessage("Please specify both tokens for adding liquidity (e.g., 'add liquidity USDC SOL').");
+            setIsLoading(false);
+            return;
+          }
+
+          addAIMessage(`Adding ${amountA} ${tokenA} and ${amountB} ${tokenB} as liquidity to the pool on  ${effectiveNetwork}...`);
+
+          try{
+            const result = await addLiquidityToPool(
+              connection,
+              wallet,
+              tokenA,
+              tokenB,
+              amountA,
+              amountB,
+              effectiveNetwork as "localnet"| "devnet" | "mainnet"
+            );
+
+            if (result.success) {
+              const explorerUrl = result.explorerUrl || null;
+              addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`)
+            } else {
+              addAIMessage(`❌ ${result.message}`);
+            }
+          } catch (e: any) {
+            console.error("Add liquidity error:", e);
+            addAIMessage(`❌ Failed to add liquidity: ${e.message}`)
+          }
+        }
+        setIsLoading(false);
+        return;
+      }
       // if (parsedInstruction.isBalanceCheck) {
       //   setIsLoading(true);
         
@@ -1176,6 +1247,7 @@ export function ChatInterface() {
           "• Balance checks (`balance`, `list all tokens`)\n" +
           "• Minting test tokens (`mint 10 USDC`)\n" +
           "• Swapping tokens (`swap 1 SOL for USDC`)\n" +
+          "• Adding liquidity (`add liquidity USDC SOL 5 10`)" +
           "• Sending payments (`send 0.5 SOL to ADDRESS`)\n" +
           "• Burning tokens (`burn 5 NIX`, `burn 10 from mint ADDRESS`)\n" +
           "• Cleaning up tokens (`cleanup unknown tokens`, `cleanup all tokens`)\n" +

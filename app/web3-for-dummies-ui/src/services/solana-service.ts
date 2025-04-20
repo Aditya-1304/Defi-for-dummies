@@ -1,11 +1,13 @@
 // src/services/solana-service.ts
-import { PublicKey, Transaction, Connection, Keypair, SystemProgram } from '@solana/web3.js';
+import { PublicKey, Transaction, Connection, Keypair, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AnchorProvider, BN, Idl, Program, web3, } from '@coral-xyz/anchor';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount } from '@solana/spl-token';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
 import { getOrCreateToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 import { Web3ForDummies } from '@/public/idl/types/web3_for_dummies';
 import * as spl from '@solana/spl-token';
+import { WalletContextState } from '@solana/wallet-adapter-react';
+import { ASSOCIATED_PROGRAM_ID } from '@coral-xyz/anchor/dist/cjs/utils/token';
 
 
 
@@ -67,12 +69,12 @@ export function clearConnectionCache(): void {
   });
 }
 
-function getProgram(connection: Connection, wallet: any): Program<Web3ForDummies> {
+export function getProgram(connection: Connection, wallet: any): Program<Web3ForDummies> {
   const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
   return new Program<Web3ForDummies>(IDL, provider);
 }
 
-const getTokenBalance = async (connection: Connection, tokenAccount: PublicKey): Promise<number | null> => {
+export const getTokenBalance = async (connection: Connection, tokenAccount: PublicKey): Promise<number | null> => {
   try {
     const balance = await connection.getTokenAccountBalance(tokenAccount);
     return balance.value.uiAmount || null;
@@ -107,7 +109,7 @@ const calculateExpectedOut = (amountIn: BN, reserveIn: BN, reserveOut: BN): BN =
   return new BN(amountOutU128.toString());
 }
 
-async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey): Promise<{ poolPda: PublicKey; poolAuthorityPda: PublicKey; poolBump: number }> {
+export async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey): Promise<{ poolPda: PublicKey; poolAuthorityPda: PublicKey; poolBump: number }> {
   const [mintAKey, mintBKey] = [mintA, mintB].sort((a, b) => a.toBuffer().compare(b.toBuffer()));
 
   const [poolPda, poolBump] = await PublicKey.findProgramAddressSync(
@@ -2033,7 +2035,7 @@ export async function executePoolSwap(
     let poolSourceVault: PublicKey;
     let poolDestinationVault: PublicKey;
 
-    if (poolAccount.tokenAMint.equal(fromMint) && poolAccount.tokenBMint.equals(toMint)) {
+    if (poolAccount.tokenAMint.equals(fromMint) && poolAccount.tokenBMint.equals(toMint)) {
       poolSourceMint = poolAccount.tokenAMint;
       poolDestinationMint = poolAccount.tokenBMint;
       poolSourceVault = poolAccount.tokenAVault;
@@ -2193,5 +2195,555 @@ export async function executePoolSwap(
       message: message,
       error: error,
     }
+  }
+}
+
+export async function createLiquidityPool(
+  connection: Connection,
+  wallet: WalletContextState,
+  tokenASymbol: string,
+  tokenBSymbol: string,
+  initialLiquidityA: number = 5,
+  initialLiquidityB: number = 5,
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+): Promise<{
+  success: boolean;
+  message: string;
+  signature?: string;
+  explorerUrl?: string;
+}> {
+  try {
+    if (!wallet.connected || !wallet.publicKey) {
+      return {
+        success: false,
+        message: "Wallet not connected",
+      };
+    }
+
+    const program = getProgram(connection, wallet)
+
+    let tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    let tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
+
+    if (!tokenAInfo || !tokenBInfo) {
+      return {
+        success: false,
+        message: "Failed to find token information"
+      };
+
+    }
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112")
+
+    if (tokenAInfo && tokenAInfo.symbol === 'SOL') {
+      tokenAInfo = {
+        ...tokenAInfo,
+        mint: wrappedSolMint
+      }
+    }
+
+    if (tokenBInfo && tokenBInfo.symbol === "SOL") {
+      tokenBInfo = {
+        ...tokenBInfo,
+        mint: wrappedSolMint
+      };
+    }
+
+    // const sortByMint = tokenAInfo.mint.toString() < tokenBInfo.mint.toString();
+
+    // const [firstToken, secondToken] = sortByMint ? [tokenAInfo, tokenBInfo] : [tokenBInfo, tokenAInfo];
+
+    const [firstToken, secondToken] = [tokenAInfo, tokenBInfo].sort((a, b) => a.mint.toBuffer().compare(b.mint.toBuffer()));
+
+    // const [firstLiquidty, secondLiquidity] = sortByMint ? [initialLiquidityA, initialLiquidityB] : [initialLiquidityB, initialLiquidityA];
+
+    const firstLiquidty = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityA : initialLiquidityB;
+
+    const secondLiquidity = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityB : initialLiquidityA;
+
+    const { poolPda, poolAuthorityPda, poolBump } = await getPoolPDAs(
+      program.programId,
+      firstToken.mint,
+      secondToken.mint
+    );
+
+
+    console.log(`Creating pool for ${tokenASymbol}/${tokenBSymbol}`);
+    console.log(` Pool PDA: ${poolPda.toString()}`);
+    console.log(`Pool Authority PDA: ${poolAuthorityPda.toString()}`);
+
+    const userTokenAAccount = await getAssociatedTokenAddress(firstToken.mint, wallet.publicKey);
+    const userTokenBAccount = await getAssociatedTokenAddress(secondToken.mint, wallet.publicKey);
+
+
+
+    const tokenAVault = await getAssociatedTokenAddress(
+      firstToken.mint,
+      poolAuthorityPda,
+      true
+    );
+    const tokenBVault = await getAssociatedTokenAddress(
+      secondToken.mint,
+      poolAuthorityPda,
+      true
+    );
+
+    const tx = await program.methods
+      .initializePool()
+      .accounts({
+        tokenAMint: firstToken.mint,
+        tokenBMint: secondToken.mint,
+        pool: poolPda,
+        poolAuthority: poolAuthorityPda,
+        tokenAVault: tokenAVault,
+        tokenBVault: tokenBVault,
+        initializer: wallet.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    console.log(`Checking balances before adding liquidity...`)
+    const firstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
+    const secondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
+
+    console.log(`User has ${firstTokenBalance} ${firstToken.symbol} and ${secondTokenBalance} ${secondToken.symbol}`)
+
+    if (firstTokenBalance < firstLiquidty) {
+      return {
+        success: false,
+        message: `Pool created, but couldn't add liquidity: Not enough ${firstToken.symbol}. You have ${firstTokenBalance}, but need ${firstLiquidty}`,
+        signature: tx,
+        explorerUrl: network === "mainnet"
+          ? `https://explorer.solana.com/tx/${tx}`
+          : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+      };
+    }
+
+    if (secondTokenBalance < secondLiquidity) {
+      return {
+        success: false,
+        message: `Pool created, but couldn't add liquidity: Not enough ${secondToken.symbol}. You have ${secondTokenBalance}, but need ${secondLiquidity}`,
+        signature: tx,
+        explorerUrl: network === "mainnet"
+          ? `https://explorer.solana.com/tx/${tx}`
+          : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+      };
+    }
+
+    try {
+      await connection.confirmTransaction(tx);
+
+
+
+      const addLiquidityTx = await program.methods
+        .addLiquidity(
+          new BN(firstLiquidty * Math.pow(10, firstToken.decimals)),
+          new BN(secondLiquidity * Math.pow(10, secondToken.decimals)),
+        )
+        .accounts({
+          pool: poolPda,
+          poolAuthority: poolAuthorityPda,
+          tokenAMint: firstToken.mint,
+          tokenBMint: secondToken.mint,
+          userTokenAAccount,
+          userTokenBAccount,
+          tokenAVault: tokenAVault,
+          tokenBVault: tokenBVault,
+          userAuthority: wallet.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID
+        } as any)
+        .rpc();
+
+      console.log("Added initial liquidity:", addLiquidityTx)
+    } catch (err: any) {
+      console.warn("Pool created but adding liquidity failed:", err);
+    }
+
+
+    const explorerUrl = network === "mainnet"
+      ? `https://explorer.solana.com/tx/${tx}`
+      : `https://explorer.solana.com/tx/${tx}?cluster=devnet`;
+
+    return {
+      success: true,
+      message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}`,
+      signature: tx,
+      explorerUrl,
+    }
+  } catch (err: any) {
+    console.error("Failed to create liquidty pool:", err);
+    return {
+      success: false,
+      message: `Failed to create liquidity pool: ${err.message}`,
+    }
+  }
+}
+
+export async function addLiquidityToPool(
+  connection: Connection,
+  wallet: WalletContextState,
+  tokenASymbol: string,
+  tokenBSymbol: string,
+  liquidityAmountA: number = 1,
+  liquidityAmountB: number = 1,
+  network: "localnet" | "devnet" | "mainnet" = "localnet",
+
+): Promise<{
+  success: boolean;
+  message: string;
+  signature?: string;
+  explorerUrl?: string;
+}> {
+  try {
+    if (!wallet.connected || !wallet.publicKey) {
+      return {
+        success: false,
+        message: "Wallet not connected",
+      };
+    }
+
+    const program = getProgram(connection, wallet);
+
+    const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+
+    if (!tokenAInfo || !tokenBInfo) {
+      return {
+        success: false,
+        message: "Failed to find token information"
+      };
+    }
+
+
+
+    let [firstToken, secondToken] = [tokenAInfo, tokenBInfo].sort((a, b) => a.mint.toBuffer().compare(b.mint.toBuffer()));
+
+    const firstAmount = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? liquidityAmountA : liquidityAmountB;
+
+    const secondAmount = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? liquidityAmountB : liquidityAmountA;
+
+    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+      program.programId,
+      firstToken.mint,
+      secondToken.mint
+    );
+
+    try {
+      await program.account.liquidityPool.fetch(poolPda);
+    } catch (e) {
+      return {
+        success: false,
+        message: `Pool for ${tokenASymbol}/${tokenBSymbol} doesn't exist yet. Create it First!`,
+      };
+    }
+
+    let userTokenAAccount = await getAssociatedTokenAddress(firstToken.mint, wallet.publicKey);
+    let userTokenBAccount = await getAssociatedTokenAddress(secondToken.mint, wallet.publicKey)
+
+    const needsToWrapSol = firstToken.symbol === 'SOL' || secondToken.symbol === 'SOL';
+    const solAmount = firstToken.symbol === 'SOL' ? firstAmount : (secondToken.symbol === 'SOL' ? secondAmount : 0);
+
+    if (needsToWrapSol) {
+      console.log(`SOL detected in liquidity pair, will wrap ${solAmount} SOL automatically...`);
+
+      const solBalance = await connection.getBalance(wallet.publicKey);
+      console.log(`Native SOL balance: ${solBalance / LAMPORTS_PER_SOL} SOL`)
+
+      if (solBalance < solAmount * LAMPORTS_PER_SOL) {
+        return {
+          success: false,
+          message: `Not enough SOL. You have ${solBalance / LAMPORTS_PER_SOL}, but need ${solAmount}`
+        }
+      }
+
+      try {
+        console.log("Attempting to wrap SOL...");
+        const wrapResult = await wrapSol(
+          connection,
+          wallet,
+          solAmount,
+          network,
+        );
+
+        if (!wrapResult.success) {
+          return {
+            success: false,
+            message: `Failed to wrap SOL: ${wrapResult.message}`
+          };
+        }
+
+        console.log(`Successfully wrapped  ${solAmount} SOL, Rechecking balances...`)
+
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+        const wrappedSolATA = await getAssociatedTokenAddress(
+          wrappedSolMint,
+          wallet.publicKey
+        );
+
+        if (firstToken.symbol === "SOL") {
+          const wrappedSolBalance = await getTokenBalance(connection, wrappedSolATA) || 0;
+          console.log(`Wrapped SOL balance: ${wrappedSolBalance} wSOL`);
+
+          if (wrappedSolBalance >= firstAmount) {
+            userTokenAAccount = wrappedSolATA;
+          }
+
+          firstToken = {
+            ...firstToken,
+            mint: wrappedSolMint,
+
+          }
+
+        } else if (secondToken.symbol === "SOL") {
+          const wrappedSolBalance = await getTokenBalance(connection,
+            wrappedSolATA) || 0;
+
+          console.log(`Wrapped SOL balance: ${wrappedSolBalance} wSOL`);
+
+          if (wrappedSolBalance >= secondAmount) {
+            userTokenBAccount = wrappedSolATA;
+          }
+
+          secondToken = {
+            ...secondToken,
+            mint: wrappedSolMint,
+          }
+        }
+
+        const updatedFirstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
+        const updatedSecondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
+
+        console.log(`Updated balances: ${updatedFirstTokenBalance} ${firstToken.symbol} and ${updatedSecondTokenBalance} ${secondToken.symbol}`);
+
+        if (updatedFirstTokenBalance < firstAmount) {
+          return {
+            success: false,
+            message: `Not enough ${firstToken.symbol} tokens after wrapping. You have ${updatedFirstTokenBalance}, but need ${firstAmount}`,
+          }
+        }
+
+        if (updatedSecondTokenBalance < secondAmount) {
+          return {
+            success: false,
+            message: `Not enough ${secondToken.symbol} tokens after wrapping. You have ${updatedSecondTokenBalance}, but need ${secondAmount}`,
+          }
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          message: `Error wrapping SOL: ${err.message}`
+        };
+      }
+    }
+
+    const firstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
+    const secondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
+
+    console.log(`User has ${firstTokenBalance} ${firstToken.symbol} and ${secondTokenBalance} ${secondToken.symbol}`);
+
+    if (firstTokenBalance < firstAmount) {
+      return {
+        success: false,
+        message: `Not enough ${firstToken.symbol}. You have ${firstTokenBalance}, but need ${firstAmount}`,
+      };
+    }
+
+    if (secondTokenBalance < secondAmount) {
+      return {
+        success: false,
+        message: `Not enough ${secondToken.symbol}. You have ${secondTokenBalance}, but need ${secondAmount}`,
+      };
+    };
+
+    const tokenAVault = await getAssociatedTokenAddress(
+      firstToken.mint,
+      poolAuthorityPda,
+      true
+    );
+
+    const tokenBVault = await getAssociatedTokenAddress(
+      secondToken.mint,
+      poolAuthorityPda,
+      true
+    );
+
+    const transaction = new Transaction();
+    let vaultsNeedCreation = false;
+
+    const tokenAVaultInfo = await connection.getAccountInfo(tokenAVault)
+    if (!tokenAVaultInfo) {
+      console.log("Token A vault does not exist, will create it")
+      vaultsNeedCreation = true;
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          tokenAVault,
+          poolAuthorityPda,
+          firstToken.mint
+        )
+      )
+    }
+
+
+    const tokenBVaultInfo = await connection.getAccountInfo(tokenBVault);
+    if (!tokenBVaultInfo) {
+      console.log("Token B vault does not exist, will create it");
+      vaultsNeedCreation = true;
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          tokenBVault,
+          poolAuthorityPda,
+          secondToken.mint
+        )
+      )
+    }
+
+
+    if (vaultsNeedCreation) {
+      console.log("Creating token vault accounts first...");
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = wallet.publicKey;
+
+      try {
+        const createVaultSignature = await wallet.sendTransaction(transaction, connection);
+        console.log("Creating vaults with signature:", createVaultSignature)
+
+        console.log("Waiting for vault creation confirmation...");
+        await connection.confirmTransaction(createVaultSignature, "confirmed");
+        console.log("Vaults created successfully!");
+
+        await new Promise(resolve => setTimeout(resolve, 5000))
+
+        const checkTokenAVault = await connection.getAccountInfo(tokenAVault);
+        const checkTokenBVault = await connection.getAccountInfo(tokenBVault);
+
+
+        if (!checkTokenAVault || !checkTokenBVault) {
+          return {
+            success: false,
+            message: "Failed to create token vaults. Please try again."
+          };
+        }
+
+        console.log("Vault accounts verified to exist:");
+        console.log(`- TokenA vault: ${checkTokenAVault ? "Created" : "Missing"}`);
+        console.log(`- TokenB vault: ${checkTokenBVault ? "Created" : "Missing"}`);
+      } catch (e: any) {
+        console.error("Error creating vaults accountS:", e);
+        return {
+          success: false,
+          message: `Failed to create vault accounts: ${e.message}`
+        }
+      }
+    }
+
+    const addLiquidityTx = await program.methods
+      .addLiquidity(
+        new BN(firstAmount * Math.pow(10, firstToken.decimals)),
+        new BN(secondAmount * Math.pow(10, secondToken.decimals))
+      )
+      .accounts({
+        pool: poolPda,
+        poolAuthority: poolAuthorityPda,
+        tokenAMint: firstToken.mint,
+        tokenBMint: secondToken.mint,
+        userTokenAAccount,
+        userTokenBAccount,
+        tokenAVault: tokenAVault,
+        tokenBVault: tokenBVault,
+        userAuthority: wallet.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc()
+
+    console.log("Added liquidity:", addLiquidityTx);
+    const explorerUrl = network === "mainnet"
+      ? `https://explorer.solana.com/tx/${addLiquidityTx}`
+      : `https://explorer.solana.com/tx/${addLiquidityTx}?cluster=devnet`;
+
+    return {
+      success: true,
+      message: `Successfully added liquidity to ${tokenASymbol}/${tokenBSymbol} pool`,
+      signature: addLiquidityTx,
+      explorerUrl,
+    };
+  } catch (err: any) {
+    console.error("Failed to add Liquidity to pool:", err);
+    return {
+      success: false,
+      message: `Failed to add liquidity: ${err.message}`,
+    }
+  }
+}
+
+export async function wrapSol(
+  connection: Connection,
+  wallet: WalletContextState,
+  amount: number,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{
+  success: boolean;
+  message: string;
+  signature?: string;
+}> {
+  try {
+
+    if (!wallet.connected || !wallet.publicKey) {
+      return {
+        success: false,
+        message: "Wallet not connected",
+      }
+    }
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    const transaction = new Transaction();
+
+    const ataAddress = await getAssociatedTokenAddress(
+      wrappedSolMint,
+      wallet.publicKey,
+    );
+
+    const ataInfo = await connection.getAccountInfo(ataAddress);
+
+    if (!ataInfo) {
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          ataAddress,
+          wallet.publicKey,
+          wrappedSolMint
+        )
+      );
+    }
+
+    const lamports = amount * LAMPORTS_PER_SOL;
+    transaction.add(
+      SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey: ataAddress,
+        lamports
+      }),
+    );
+    transaction.add(createSyncNativeInstruction(ataAddress));
+
+    const signature = await wallet.sendTransaction(transaction, connection);
+    await connection.confirmTransaction(signature, "confirmed");
+
+    return {
+      success: true,
+      message: `Successfully wrapped ${amount} SOL to wSOL`,
+      signature
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err.message
+    };
   }
 }
