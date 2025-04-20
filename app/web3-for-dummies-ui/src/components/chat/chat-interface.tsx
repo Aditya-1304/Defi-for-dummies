@@ -456,6 +456,48 @@ export function ChatInterface() {
         setIsLoading(false);
         return; // Stop further processing
       }
+      else if (parsedInstruction.isCreatePool) {
+        console.log("Handling as CREATE POOL request:", parsedInstruction);
+        if(!wallet.connected || !wallet.publicKey) {
+          addAIMessage("Please connect your wallet to create a pool.")
+        } else {
+          const tokenA = parsedInstruction.tokenA || '';
+          const tokenB = parsedInstruction.tokenB || '';
+          const amountA = parsedInstruction.amountA || 2;
+          const amountB = parsedInstruction.amountB || 2;
+
+          if(!tokenA || !tokenB) {
+            addAIMessage("Please specify both tokens for creating a pool (e.g., 'create pool USDC SOL').");
+            setIsLoading(false);
+            return;
+          }
+
+          addAIMessage(`Creating liquidity pool for ${tokenA}/${tokenB} with initial liquidity ${amountA} ${tokenA} and ${amountB} ${tokenB} on ${effectiveNetwork}...`);
+
+          try {
+            const result = await createLiquidityPool(
+              connection,
+              wallet,
+              tokenA,
+              tokenB,
+              amountA,
+              amountB,
+              effectiveNetwork as "localnet"| "devnet" | "mainnet"
+            );
+
+            if(result.success) {
+              const explorerUrl = result.explorerUrl || null
+              addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`)
+            }else {
+              addAIMessage(`❌ ${result.message}`)
+            }
+          }catch(e: any) {
+            console.error("Create pool error:", e);
+            addAIMessage(`❌ Failed to create pool: ${e.message}`)
+          }
+        }
+        setIsLoading(false);
+      }
 
       else if (parsedInstruction.isAddLiquidity) {
         console.log("Handling as ADD LIQUIDITY request:", parsedInstruction);

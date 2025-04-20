@@ -1998,16 +1998,32 @@ export async function executePoolSwap(
     const toTokenInfo = await getOrCreateToken(connection, wallet, toTokenSymbol, network)
 
 
+
+
     if (!fromTokenInfo || !toTokenInfo) {
       return {
         success: false,
         message: "Could not find token mint addresses",
       }
     }
-    const fromMint = fromTokenInfo.mint;
-    const toMint = toTokenInfo.mint;
-    console.log(` From Mint (${fromTokenSymbol}): ${fromMint.toBase58()}`)
-    console.log(` To Mint (${toTokenSymbol}): ${toMint.toBase58()}`)
+
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+
+    let fromMint = fromTokenInfo.mint;
+    let toMint = toTokenInfo.mint;
+
+    if (fromTokenSymbol.toUpperCase() === "SOL") {
+      fromMint = wrappedSolMint;
+      console.log("Using wrapped SOL mint for 'from' token");
+    }
+
+    if (toTokenSymbol.toUpperCase() === "SOL") {
+      toMint = wrappedSolMint;
+      console.log("Using wrapped SOL mint for 'to' token");
+    }
+
+    console.log(` From Mint (${fromTokenSymbol}): ${fromMint.toBase58()}`);
+    console.log(` To Mint (${toTokenSymbol}): ${toMint.toBase58()}`);
 
 
     console.log(" Deriving pool PDAs...");
@@ -2147,35 +2163,74 @@ export async function executePoolSwap(
 
 
     console.log(" Sending transaction...");
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = wallet.publicKey;
 
     const signedTransaction = await wallet.signTransaction(transaction);
     const signature = await connection.sendRawTransaction(signedTransaction.serialize());
 
-    console.log(` Transaction sentL ${signature}`)
+    console.log(` Transaction sent: ${signature}`);
 
     console.log(" Confirming transaction...");
-    await connection.confirmTransaction({
-      signature,
-      blockhash,
-      lastValidBlockHeight: await connection.getBlockHeight(),
-    }, "confirmed");
-    console.log(" Transaction confirmed!");
 
-    const explorerUrl = network === "mainnet" ?
-      `https://explorer.solana.com/tx/${signature}`
-      : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+    try {
+      // Use the lastValidBlockHeight from the SAME getLatestBlockhash call
+      const confirmation = await connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight, // Use this instead of calling getBlockHeight() again
+      }, "confirmed");
 
-    return {
-      success: true,
-      message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
-      signature,
-      explorerUrl,
-      inputAmount: amountIn,
-      outputAmount: estimatedOutputAmount,
-    };
+      if (confirmation.value.err) {
+        throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+      }
+
+      console.log(" Transaction confirmed!");
+
+      const explorerUrl = network === "mainnet" ?
+        `https://explorer.solana.com/tx/${signature}`
+        : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+      return {
+        success: true,
+        message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
+        signature,
+        explorerUrl,
+        inputAmount: amountIn,
+        outputAmount: estimatedOutputAmount,
+      };
+    } catch (error: any) {
+      console.error("Transaction confirmation error:", error);
+      if (error.toString().includes("block height exceeded")) {
+        // The transaction may still succeed, check manually
+        try {
+          const status = await connection.getSignatureStatus(signature);
+          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+            console.log("Transaction succeeded despite confirmation timeout!");
+            // ADD RETURN STATEMENT HERE
+            const explorerUrl = network === "mainnet" ?
+              `https://explorer.solana.com/tx/${signature}`
+              : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+            return {
+              success: true,
+              message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
+              signature,
+              explorerUrl,
+              inputAmount: amountIn,
+              outputAmount: estimatedOutputAmount,
+            };
+          } else {
+            throw new Error("Transaction expired and was not found in the ledger");
+          }
+        } catch (statusError) {
+          throw error; // Re-throw original error if we can't get status
+        }
+      } else {
+        throw error; // Re-throw other errors
+      }
+    }
 
 
   } catch (error: any) {
@@ -2203,8 +2258,8 @@ export async function createLiquidityPool(
   wallet: WalletContextState,
   tokenASymbol: string,
   tokenBSymbol: string,
-  initialLiquidityA: number = 5,
-  initialLiquidityB: number = 5,
+  initialLiquidityA: number = 2,
+  initialLiquidityB: number = 2,
   network: "localnet" | "devnet" | "mainnet" = "localnet",
 ): Promise<{
   success: boolean;
@@ -2406,14 +2461,30 @@ export async function addLiquidityToPool(
 
     const program = getProgram(connection, wallet);
 
-    const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
-    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+    let tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    let tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
 
     if (!tokenAInfo || !tokenBInfo) {
       return {
         success: false,
         message: "Failed to find token information"
       };
+    }
+
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+
+    if (tokenAInfo && tokenAInfo.symbol === "SOL") {
+      tokenAInfo = {
+        ...tokenAInfo,
+        mint: wrappedSolMint
+      }
+    }
+
+    if (tokenBInfo && tokenBInfo.symbol === "SOL") {
+      tokenBInfo = {
+        ...tokenBInfo,
+        mint: wrappedSolMint
+      }
     }
 
 
@@ -2747,3 +2818,17 @@ export async function wrapSol(
     };
   }
 }
+
+// export function normalizeTokenAmounts(
+//   tokenAAmount: number,
+//   tokenADecimals: number,
+//   tokenBAmount: number,
+//   tokenBDecimals: number,
+//   tokenAPrice: number = 1,
+//   tokenBPrice: number = 1,
+// ): {
+//   normalizedAmountA: number,
+//   normalizedAmountB: number,
+// } {
+//   const tokenAValue 
+// }

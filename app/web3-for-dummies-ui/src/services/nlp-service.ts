@@ -348,6 +348,28 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     network: 'localnet',
     confidence: 0.8,
   },
+  'create pool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true, // This is the key difference
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'localnet',
+    confidence: 0.9,
+  },
+  'createpool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'localnet',
+    confidence: 0.9,
+  },
 };
 
 export interface PaymentInstruction {
@@ -358,6 +380,7 @@ export interface PaymentInstruction {
   isTokenCleanup?: boolean;
   isSwapRequest?: boolean;
   isAddLiquidity?: boolean;
+  isCreatePool?: boolean;
   tokenA?: string;
   tokenB?: string;
   amountA?: number;
@@ -484,6 +507,8 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     18. Is this a request to remove all tokens? (true/false)
     19. Is this a request to remove specific tokens? (true/false)
     20. Is this a request to burn specific tokens? (true/false)
+    21. Is this a request to create a pool? (true/false)
+
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
 
@@ -558,6 +583,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isTokenCleanup": true/false,
       "isSwapRequest": true/false,
       "isAddLiquidity": true/false,
+      "isCreatePool": true/false,
       "tokenA" : "token symbol" or null,
       "tokenB" : "token symbol" or null,
       "amountA": number or null,
@@ -601,6 +627,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isTokenCleanup: !!parsedResult.isTokenCleanup,
       isSwapRequest: !!parsedResult.isSwapRequest, // Extract swap flag
       isAddLiquidity: !!parsedResult.isAddLiquidity,
+      isCreatePool: !!parsedResult.isCreatePool,
       tokenA: parsedResult.tokenA || undefined,
       tokenB: parsedResult.tokenB || undefined,
       amountA: parsedResult.amountA !== null && parsedResult.amountA !== undefined
@@ -657,6 +684,42 @@ function parseWithRegex(message: string): PaymentInstruction {
     network = "mainnet";
   } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
     network = "localnet"
+  }
+
+  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
+  const swapAltRegex = /swap\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+to\s+([a-z]+)/i;
+
+  const swapMatch = lowerMessage.match(swapRegex) || lowerMessage.match(swapAltRegex);
+
+  if (swapMatch) {
+    const amount = parseFloat(swapMatch[1]);
+    const fromToken = swapMatch[2].toUpperCase();
+    const toToken = swapMatch[3].toUpperCase();
+
+    console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      amount,
+      fromToken,
+      toToken,
+      network,
+      confidence: 0.95
+    };
+  }
+
+  // Also check for general swap keywords
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
 
   if (lowerMessage.includes('mint') ||
@@ -730,6 +793,29 @@ function parseWithRegex(message: string): PaymentInstruction {
     }
   }
 
+
+  const createPoolPattern = /(?:create\s+(?:pool|liquidity)|createpool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const createpoolMatch = lowerMessage.match(createPoolPattern);
+
+  if (createpoolMatch) {
+    return {
+      isPayment: false,
+      isBalanceCheck: false,
+      isCompleteBalanceCheck: false,
+      isMintRequest: false,
+      isTokenCleanup: false,
+      isSwapRequest: false,
+      isAddLiquidity: false,
+      isCreatePool: true,
+      tokenA: createpoolMatch[1],
+      tokenB: createpoolMatch[2],
+      amountA: parseFloat(createpoolMatch[3]) || 2,
+      amountB: parseFloat(createpoolMatch[4]) || 2,
+      network: "localnet",
+      confidence: 0.95
+    };
+  }
+
   const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
   const liquidityMatch = lowerMessage.match(addLiquidityRegex);
   if (liquidityMatch || lowerMessage.includes("addliquidity")) {
@@ -765,26 +851,7 @@ function parseWithRegex(message: string): PaymentInstruction {
     return { isPayment: false, confidence: 0.9 };
   }
 
-  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
-  const swapMatch = lowerMessage.match(swapRegex);
 
-  if (swapMatch) {
-    const amount = parseFloat(swapMatch[1]);
-    const fromToken = swapMatch[2].toUpperCase();
-    const toToken = swapMatch[3].toUpperCase();
-
-    console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
-
-    return {
-      isPayment: false,
-      isSwapRequest: true,
-      amount,
-      fromToken,
-      toToken,
-      network,
-      confidence: 0.95
-    };
-  }
   if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
     return {
       isPayment: false,
