@@ -3,7 +3,7 @@ import { BN } from "@coral-xyz/anchor"
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import { getOrCreateToken } from './tokens-service';
 import { executePoolSwap, getPoolPDAs, getProgram } from './solana-service';
-import { createCloseAccountInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { createAssociatedTokenAccountInstruction, createCloseAccountInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 export { executePoolSwap } from './solana-service';
 
@@ -397,6 +397,23 @@ export async function executeSwap(
     const tx = new Transaction();
     // TODO: Add wSOL wrapping instructions if fromIsSol
     // TODO: Add ATA creation instruction for userDestinationTokenAccount if needed
+
+    console.log("[executeSwap] Checking if destination token account exists...");
+    let destinationAccountInfo = await connection.getAccountInfo(userDestinationTokenAccount);
+
+    if (!destinationAccountInfo) {
+      console.log("[executeSwap] Destination token account does not exist, creating it...");
+      tx.add(
+        createAssociatedTokenAccountInstruction(
+          authority,                   // Payer
+          userDestinationTokenAccount, // Associated token account address
+          authority,                   // Owner
+          toMint                       // Mint
+        )
+      );
+      console.log("[executeSwap] Added instruction to create destination token account");
+    }
+
     const actualOutputAmount = quote.expectedOutputAmount;
     // Add the Swap instruction
     // Ensure account names match your Rust program's Swap struct
