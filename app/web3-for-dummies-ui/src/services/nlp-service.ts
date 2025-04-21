@@ -399,6 +399,7 @@ export interface PaymentInstruction {
   amount?: number;
   recipient?: string;
   network?: "localnet" | "devnet" | "mainnet";
+  estimatedReceiveAmount?: number;
   confidence: number;
   raw?: any;
 }
@@ -655,6 +656,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       token: parsedResult.token || "SOL",
       fromToken: parsedResult.fromToken || undefined, // Extract fromToken
       toToken: parsedResult.toToken || undefined,   // Extract toToken
+      estimatedReceiveAmount: parsedResult.estimatedReceiveAmount || undefined,
       recipient: parsedResult.recipient || undefined,
       network: parsedResult.network || "localnet",
       confidence: parsedResult.confidence || 0.8,
@@ -696,7 +698,16 @@ function parseWithRegex(message: string): PaymentInstruction {
     const fromToken = swapMatch[2].toUpperCase();
     const toToken = swapMatch[3].toUpperCase();
 
-    console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+    // console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+    let estimatedReceiveAmount = amount;
+    if (fromToken === "USDC" && toToken === "SOL") {
+      estimatedReceiveAmount = amount / 200;
+      console.log(`Value estimate: ${amount} USDC = ${estimatedReceiveAmount} SOL`);
+
+    } else if (fromToken === 'SOL' && toToken === 'USDC') {
+      estimatedReceiveAmount = amount * 200;
+      console.log(`Value estimate: ${amount} SOL = ${estimatedReceiveAmount} USDC`);
+    }
 
     return {
       isPayment: false,
@@ -704,6 +715,7 @@ function parseWithRegex(message: string): PaymentInstruction {
       amount,
       fromToken,
       toToken,
+      estimatedReceiveAmount,
       network,
       confidence: 0.95
     };
