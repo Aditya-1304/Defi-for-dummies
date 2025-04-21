@@ -1,7 +1,7 @@
 // src/services/solana-service.ts
 import { PublicKey, Transaction, Connection, Keypair, SystemProgram, LAMPORTS_PER_SOL, TransactionInstruction } from '@solana/web3.js';
 import { AnchorProvider, BN, Idl, Program, web3, } from '@coral-xyz/anchor';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount, getAccount, Account as TokenAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount, getAccount, Account as TokenAccount, createCloseAccountInstruction } from '@solana/spl-token';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
 import { getOrCreateToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 import { Web3ForDummies } from '@/public/idl/types/web3_for_dummies';
@@ -3953,4 +3953,136 @@ function calculateGCD(a: number, b: number): number {
     a = t;
   }
   return a;
+}
+
+export async function getPoolLiquidity(
+  connection: Connection,
+  tokenASymbol: string,
+  tokenBSymbol: string,
+  wallet: WalletContextState,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{
+  success: boolean;
+  message: string;
+  tokenA?: {
+    symbol: string;
+    amount: number;
+    decimals: number;
+    usdValue?: number;
+  };
+  tokenB?: {
+    symbol: string;
+    amount: number;
+    decimals: number;
+    usdValue?: number;
+  };
+  totalLiquidityUsd?: number;
+}> {
+  try {
+    console.log(`[getPoolLiquidity] Querying pool: ${tokenASymbol}/${tokenBSymbol}...`);
+
+    const tokenAInfo = await getOrCreateToken(connection, wallet,
+      tokenASymbol, network);
+
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+
+    if (!tokenAInfo || !tokenBInfo) {
+      return {
+        success: false,
+        message: "Failed to find token information"
+      };
+    }
+
+    const program = getProgram(connection, wallet)
+    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+      program.programId,
+      tokenAInfo.mint,
+      tokenBInfo.mint,
+    );
+
+    try {
+      const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+
+      const tokenAVault = poolAccount.tokenAVault;
+      const tokenBVault = poolAccount.tokenBVault;
+
+      const tokenABalance = await connection.getTokenAccountBalance(tokenAVault).then(res => Number(res.value.amount) / Math.pow(10, tokenAInfo.decimals));
+
+      const tokenBBalance = await connection.getTokenAccountBalance(tokenBVault).then(res => Number(res.value.amount) / Math.pow(10, tokenBInfo.decimals));
+
+
+      return {
+        success: true,
+        message: `Successfully retrieved pool liquidity for ${tokenASymbol}/${tokenBSymbol}`,
+        tokenA: {
+          symbol: tokenASymbol,
+          amount: tokenABalance,
+          decimals: tokenAInfo.decimals,
+        },
+        tokenB: {
+          symbol: tokenBSymbol,
+          amount: tokenBBalance,
+          decimals: tokenBInfo.decimals
+        },
+      };
+    } catch (error: any) {
+      if (error.message?.includes("Account does not exist")) {
+        return {
+          success: false,
+          message: `No liquidity pool exists for ${tokenASymbol}/${tokenBSymbol}`
+        }
+      }
+      throw error
+    }
+  } catch (err: any) {
+    console.error("Failed to get pool liquidity:", err)
+    return {
+      success: false,
+      message: `Error fetching pool information: ${err.message}`
+    }
+  }
+}
+
+export async function unwrapSol(
+  connection: Connection,
+  wallet: any
+): Promise<{
+  success: boolean,
+  message: string,
+  signature?: string
+}> {
+  try {
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    const userWsolAccount = await getAssociatedTokenAddress(wrappedSolMint, wallet.publicKey);
+
+    // Check if account exists
+    let accountInfo;
+    try {
+      accountInfo = await connection.getAccountInfo(userWsolAccount);
+    } catch (e) { }
+
+    if (!accountInfo) {
+      return { success: false, message: "You don't have any wrapped SOL to unwrap." };
+    }
+
+    // Create close instruction
+    const tx = new Transaction().add(
+      createCloseAccountInstruction(
+        userWsolAccount,
+        wallet.publicKey,
+        wallet.publicKey,
+      )
+    );
+
+    const signature = await wallet.sendTransaction(tx, connection);
+    await connection.confirmTransaction(signature);
+
+    return {
+      success: true,
+      message: "Successfully unwrapped all SOL to native SOL.",
+      signature
+    };
+  } catch (error: any) {
+    return { success: false, message: `Failed to unwrap SOL: ${error.message}` };
+  }
 }

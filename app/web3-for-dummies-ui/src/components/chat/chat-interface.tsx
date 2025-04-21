@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send, WalletMinimal } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio, getPoolLiquidity, unwrapSol } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
@@ -602,11 +602,14 @@ export function ChatInterface() {
           if (result && result.success) {
             const explorerUrl = result.explorerUrl || "";
             // Use actual output if available, otherwise fallback to quoted amount
-            const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
+            // const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
 
             addAIMessage(
-              `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` +
+              // `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` +
+              // `View transaction in [Solana Explorer](${explorerUrl})`
+              `✅ ${result.message}\n\n` +
               `View transaction in [Solana Explorer](${explorerUrl})`
+            
             );
           } else {
             // Handle execution errors (slippage, confirmation timeout, etc.)
@@ -774,6 +777,88 @@ export function ChatInterface() {
           }
         }
       }
+    }
+    else if (parsedInstruction.isPoolLiquidityCheck) {
+      console.log("Handling as POOL LIQUIDITY CHECK request:", parsedInstruction);
+      if (!wallet.connected || !wallet.publicKey) {
+        addAIMessage("Please connect your wallet to check pool liquidity.");
+      } else {
+        const tokenA = parsedInstruction.tokenA || '';
+        const tokenB = parsedInstruction.tokenB || '';
+        
+        if (!tokenA || !tokenB) {
+          addAIMessage("Please specify both tokens to check pool liquidity (e.g., 'check pool SOL USDC').");
+        } else {
+          addAIMessage(`Checking liquidity for ${tokenA}/${tokenB} pool on ${effectiveNetwork}...`);
+          
+          try {
+            // Fetch both liquidity info and ratio info in parallel for efficiency
+            const [liquidityResult, ratioResult] = await Promise.all([
+              getPoolLiquidity(
+                connection, tokenA, tokenB, wallet,
+                effectiveNetwork as "localnet" | "devnet" | "mainnet"
+              ),
+              getPoolExactRatio(
+                connection, tokenA, tokenB,
+                effectiveNetwork as "localnet" | "devnet" | "mainnet"
+              )
+            ]);
+            
+            if (liquidityResult.success) {
+              const tokenAAmount = liquidityResult.tokenA?.amount.toFixed(4);
+              const tokenBAmount = liquidityResult.tokenB?.amount.toFixed(4);
+              
+              // Use the human-readable ratio from getPoolExactRatio
+              const ratioDisplay = ratioResult.humanReadableRatio ? 
+                `\n• Required Ratio: ${ratioResult.humanReadableRatio}` : '';
+              
+              addAIMessage(
+                `📊 **${tokenA}/${tokenB} Pool Liquidity:**\n` +
+                `• ${tokenA}: ${tokenAAmount}\n` +
+                `• ${tokenB}: ${tokenBAmount}${ratioDisplay}\n\n` +
+                `To add liquidity to this pool, use: \`add liquidity ${tokenA} ${tokenB} <amount> <amount>\` with the ratio shown above.`
+              );
+            } else {
+              addAIMessage(`❌ ${liquidityResult.message}`);
+            }
+          } catch (error: any) {
+            console.error("Error checking pool liquidity:", error);
+            addAIMessage(`❌ Error checking pool liquidity: ${error.message}`);
+          }
+        }
+      }
+      setIsLoading(false);
+      return;
+    }
+    else if (parsedInstruction.isUnwrapSol) {
+      console.log("Handling as UNWRAP SOL request:", parsedInstruction);
+      if (!wallet.connected || !wallet.publicKey) {
+        addAIMessage("Please connect your wallet to unwrap SOL.");
+      } else {
+        addAIMessage(`Unwrapping your wSOL to native SOL on ${effectiveNetwork}...`);
+        try {
+          const result = await unwrapSol(
+            connection,
+            wallet
+          );
+          
+          if (result.success) {
+            if (result.signature) {
+              const explorerUrl = getExplorerLink(result.signature, effectiveNetwork);
+              addAIMessage(`✅ ${result.message}\n\nView transaction in [Solana Explorer](${explorerUrl})`);
+            } else {
+              addAIMessage(`✅ ${result.message}`);
+            }
+          } else {
+            addAIMessage(`❌ ${result.message}`);
+          }
+        } catch (error: any) {
+          console.error("Unwrap SOL error:", error);
+          addAIMessage(`❌ Failed to unwrap SOL: ${error.message}`);
+        }
+      }
+      setIsLoading(false);
+      return;
     }
       // if (parsedInstruction.isBalanceCheck) {
       //   setIsLoading(true);
@@ -1521,11 +1606,14 @@ export function ChatInterface() {
           "Sorry, I didn't understand that. I can help with:\n" +
           "• Balance checks (`balance`, `list all tokens`)\n" +
           "• Minting test tokens (`mint 10 USDC`)\n" +
-          "• Swapping tokens (`swap 1 SOL for USDC`) - Note: 1 SOL ≈ 200 USDC in value\n" +
-          "• Adding liquidity (`add liquidity SOL USDC 1 200`) - Maintain proper value ratio!\n" +
+          "• Swapping tokens (`swap 1 SOL for USDC`)\n" +
+          "• Creating liquidity pools (`create pool SOL USDC 1 200`)\n" +
+          "• Adding liquidity (`add liquidity SOL USDC 1 200`)\n" +
+          "• Checking pool liquidity (`check pool SOL USDC`, `show pool SOL USDC`)\n" +
           "• Sending payments (`send 0.5 SOL to ADDRESS`)\n" +
           "• Burning tokens (`burn 5 NIX`, `burn 10 from mint ADDRESS`)\n" +
           "• Cleaning up tokens (`cleanup unknown tokens`, `cleanup all tokens`)\n" +
+          "• Unwrapping SOL (`unwrap sol`)\n" +
           "• Fixing token names (`fix token names`)"
         );
         setIsLoading(false);
