@@ -1182,9 +1182,22 @@ export async function mintTestTokens(
           };
         }
 
+        if (!tokenCache[network]) {
+          tokenCache[network] = {};
+        }
+
+        if (!tokenCache[network][tokenSymbol]) {
+          // Initialize the token in cache if it doesn't exist
+          tokenCache[network][tokenSymbol] = {
+            mint: tokenInfo.mint,
+            decimals: tokenInfo.decimals,
+            symbol: tokenSymbol
+          };
+        }
+
         try {
           // Use the existing token mint from cache
-          const TokenMint = tokenCache[network][tokenSymbol].mint;
+          // const TokenMint = tokenCache[network][tokenSymbol].mint;
 
           // Mint more tokens from the existing mint
           const signature = await mintMoreCustomTokens(
@@ -2300,72 +2313,145 @@ export async function executePoolSwap(
 
 
     console.log(" Sending transaction...");
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = wallet.publicKey;
+    if (network === "devnet") {
+      let attempts = 0;
+      const maxAttempts = 3;
 
-    const signedTransaction = await wallet.signTransaction(transaction);
-    const signature = await connection.sendRawTransaction(signedTransaction.serialize());
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`Devnet swap transaction attempt ${attempts}/${maxAttempts}`);
 
-    console.log(` Transaction sent: ${signature}`);
+          // Create a fresh connection with better timeout settings for devnet
+          const devnetConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
 
-    console.log(" Confirming transaction...");
+          // Get fresh blockhash for each attempt
+          const { blockhash, lastValidBlockHeight } = await devnetConnection.getLatestBlockhash('confirmed');
+          transaction.recentBlockhash = blockhash;
+          transaction.feePayer = wallet.publicKey;
 
-    try {
-      // Use the lastValidBlockHeight from the SAME getLatestBlockhash call
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash,
-        lastValidBlockHeight, // Use this instead of calling getBlockHeight() again
-      }, "confirmed");
+          // Sign transaction first to avoid timeout issues
+          const signedTx = await wallet.signTransaction(transaction);
 
-      if (confirmation.value.err) {
-        throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          // Send raw transaction
+          console.log("Sending raw transaction to devnet...");
+          const signature = await devnetConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed'
+          });
+
+          console.log(`Transaction sent: ${signature}`);
+
+          // Wait for confirmation
+          const confirmation = await devnetConnection.confirmTransaction({
+            signature,
+            blockhash,
+            lastValidBlockHeight
+          }, 'confirmed');
+
+          if (confirmation.value.err) {
+            throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          }
+
+          console.log(" Swap transaction confirmed!");
+          const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+          return {
+            success: true,
+            message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
+            signature,
+            explorerUrl,
+            inputAmount: amountIn,
+            outputAmount: estimatedOutputAmount,
+          };
+        } catch (error: any) {
+          console.warn(`Swap attempt ${attempts} failed:`, error);
+
+          // If hitting last attempt, throw the error
+          if (attempts >= maxAttempts) {
+            throw error;
+          }
+
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, attempts - 1);
+          console.log(`Waiting ${delay}ms before next swap attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
 
-      console.log(" Transaction confirmed!");
+      // This code should not be reached due to the throw in the loop
+      throw new Error("Failed after all retry attempts");
+    } else {
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = wallet.publicKey;
 
-      const explorerUrl = network === "mainnet" ?
-        `https://explorer.solana.com/tx/${signature}`
-        : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      const signedTransaction = await wallet.signTransaction(transaction);
+      const signature = await connection.sendRawTransaction(signedTransaction.serialize());
 
-      return {
-        success: true,
-        message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
-        signature,
-        explorerUrl,
-        inputAmount: amountIn,
-        outputAmount: estimatedOutputAmount,
-      };
-    } catch (error: any) {
-      console.error("Transaction confirmation error:", error);
-      if (error.toString().includes("block height exceeded")) {
-        // The transaction may still succeed, check manually
-        try {
-          const status = await connection.getSignatureStatus(signature);
-          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
-            console.log("Transaction succeeded despite confirmation timeout!");
-            // ADD RETURN STATEMENT HERE
-            const explorerUrl = network === "mainnet" ?
-              `https://explorer.solana.com/tx/${signature}`
-              : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+      console.log(` Transaction sent: ${signature}`);
 
-            return {
-              success: true,
-              message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
-              signature,
-              explorerUrl,
-              inputAmount: amountIn,
-              outputAmount: estimatedOutputAmount,
-            };
-          } else {
-            throw new Error("Transaction expired and was not found in the ledger");
-          }
-        } catch (statusError) {
-          throw error; // Re-throw original error if we can't get status
+      console.log(" Confirming transaction...");
+
+      try {
+        // Use the lastValidBlockHeight from the SAME getLatestBlockhash call
+        const confirmation = await connection.confirmTransaction({
+          signature,
+          blockhash,
+          lastValidBlockHeight, // Use this instead of calling getBlockHeight() again
+        }, "confirmed");
+
+        if (confirmation.value.err) {
+          throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
         }
-      } else {
-        throw error; // Re-throw other errors
+
+        console.log(" Transaction confirmed!");
+
+        const explorerUrl = network === "mainnet" ?
+          `https://explorer.solana.com/tx/${signature}`
+          : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+        return {
+          success: true,
+          message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
+          signature,
+          explorerUrl,
+          inputAmount: amountIn,
+          outputAmount: estimatedOutputAmount,
+        };
+      } catch (error: any) {
+        console.error("Transaction confirmation error:", error);
+        if (error.toString().includes("block height exceeded")) {
+          // The transaction may still succeed, check manually
+          try {
+            const status = await connection.getSignatureStatus(signature);
+            if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+              console.log("Transaction succeeded despite confirmation timeout!");
+              // ADD RETURN STATEMENT HERE
+              const explorerUrl = network === "mainnet" ?
+                `https://explorer.solana.com/tx/${signature}`
+                : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+              return {
+                success: true,
+                message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ~${estimatedOutputAmount.toFixed(4)} ${toTokenSymbol}`,
+                signature,
+                explorerUrl,
+                inputAmount: amountIn,
+                outputAmount: estimatedOutputAmount,
+              };
+            } else {
+              throw new Error("Transaction expired and was not found in the ledger");
+            }
+          } catch (statusError) {
+            throw error; // Re-throw original error if we can't get status
+          }
+        } else {
+          throw error; // Re-throw other errors
+        }
       }
     }
 
@@ -3020,26 +3106,94 @@ export async function createLiquidityPool(
 
     // Send and confirm transaction
     console.log(" Sending create pool transaction...");
-    const signature = await wallet.sendTransaction(tx, connection);
-    console.log(" Create pool transaction sent:", signature);
+    if (network === "devnet") {
+      let signature;
+      let attempts = 0;
+      const maxAttempts = 3;
 
-    const confirmation = await connection.confirmTransaction(signature, "confirmed");
-    if (confirmation.value.err) {
-      const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-      console.error("Create Pool Transaction confirmation failed:", confirmation.value.err);
-      console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
-      throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`Devnet transaction attempt ${attempts}/${maxAttempts}`);
+
+          // Create a fresh connection with better timeout settings
+          const devnetConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
+
+          // Get fresh blockhash before each attempt
+          const { blockhash } = await devnetConnection.getLatestBlockhash('confirmed');
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = wallet.publicKey;
+
+          // Sign transaction first to avoid timeout issues
+          const signedTx = await wallet.signTransaction(tx);
+
+          // Send raw transaction
+          console.log("Sending raw transaction to devnet...");
+          signature = await devnetConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed'
+          });
+
+          console.log(`Transaction sent: ${signature}`);
+          await devnetConnection.confirmTransaction(signature, 'confirmed');
+
+          // If we made it here, transaction was successful
+          console.log("✅ Pool created successfully on devnet!");
+          const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+          return {
+            success: true,
+            message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}. You can now add initial liquidity.`,
+            signature,
+            explorerUrl,
+          };
+        } catch (error) {
+          console.warn(`Attempt ${attempts} failed:`, error);
+
+          if (attempts >= maxAttempts) {
+            console.error("Failed after all retry attempts");
+            throw error;
+          }
+
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, attempts - 1);
+          console.log(`Waiting ${delay}ms before next attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+
+      // Add this return statement to handle the case where we exit the while loop
+      // This ensures all code paths return a value
+      return {
+        success: false,
+        message: `Failed to create liquidity pool for ${tokenASymbol}/${tokenBSymbol} after multiple attempts`,
+        error: new Error("Max retry attempts reached")
+      };
+    } else {
+      const signature = await wallet.sendTransaction(tx, connection);
+      console.log(" Create pool transaction sent:", signature);
+
+      const confirmation = await connection.confirmTransaction(signature, "confirmed");
+      if (confirmation.value.err) {
+        const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+        console.error("Create Pool Transaction confirmation failed:", confirmation.value.err);
+        console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
+        throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
+
+      console.log("✅ Pool created successfully!");
+      const explorerUrl = getExplorerLink(signature, network);
+
+      return {
+        success: true,
+        message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}. You can now add initial liquidity.`,
+        signature,
+        explorerUrl,
+      };
     }
-
-    console.log("✅ Pool created successfully!");
-    const explorerUrl = getExplorerLink(signature, network);
-
-    return {
-      success: true,
-      message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}. You can now add initial liquidity.`,
-      signature,
-      explorerUrl,
-    };
 
   } catch (error: any) {
     console.error("💥 Failed to create liquidity pool:", error);
@@ -3633,46 +3787,94 @@ export async function addLiquidityToPool(
 
     // 9. Send and Confirm Transaction
     console.log(" Sending add liquidity transaction...");
-    const signature = await wallet.sendTransaction(tx, connection);
-    console.log(" Transaction sent:", signature);
 
-    console.log(" Confirming transaction...");
-    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    if (network === "devnet") {
+      let attempts = 0;
+      const maxAttempts = 3;
 
-    if (confirmation.value.err) {
-      // Try to get logs for better error diagnosis
-      const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-      console.error("Add Liquidity Transaction confirmation failed:", confirmation.value.err);
-      console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`Devnet transaction attempt ${attempts}/${maxAttempts}`);
 
-      // Parse specific errors from logs
-      const logs = txDetails?.meta?.logMessages || [];
-      if (logs.some(log => log.includes("Error: DisproportionateLiquidity"))) {
-        return { success: false, message: "❌ Failed: DisproportionateLiquidity. Amounts don't match pool ratio." };
+          // Create a fresh connection with better timeout settings
+          const devnetConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
+
+          // Get fresh blockhash before attempting
+          const { blockhash } = await devnetConnection.getLatestBlockhash('confirmed');
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = authority;
+
+          // Sign and send transaction
+          const signedTx = await wallet.signTransaction(tx);
+          const signature = await devnetConnection.sendRawTransaction(signedTx.serialize());
+
+          await devnetConnection.confirmTransaction(signature, 'confirmed');
+          console.log("✅ Liquidity added successfully!");
+
+          const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+          return {
+            success: true,
+            message: `Successfully added ${liquidityAmountA} ${tokenASymbol} and ${liquidityAmountB} ${tokenBSymbol} liquidity.`,
+            signature,
+            explorerUrl,
+          };
+        } catch (error) {
+          console.warn(`Attempt ${attempts} failed:`, error);
+          if (attempts >= maxAttempts) throw error;
+
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, attempts - 1);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-      if (logs.some(log => log.includes("ConstraintSeeds"))) {
-        // This often means the poolAuthority PDA passed didn't match what the program derived.
-        // Double-check the seeds ("pool") and the mint order used for derivation.
-        return { success: false, message: "❌ Failed: Pool authority PDA mismatch (ConstraintSeeds). Check derivation logic." };
-      }
-      if (logs.some(log => log.includes("ConstraintTokenOwner"))) {
-        return { success: false, message: "❌ Failed: Token account ownership error. Check vault/user accounts." };
-      }
-      // Add more specific error checks based on your program's potential errors
 
-      // Generic failure message
-      throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
+      throw new Error("Failed after all retry attempts");
+    } else {
+      const signature = await wallet.sendTransaction(tx, connection);
+      console.log(" Transaction sent:", signature);
+
+      console.log(" Confirming transaction...");
+      const confirmation = await connection.confirmTransaction(signature, "confirmed");
+
+      if (confirmation.value.err) {
+        // Try to get logs for better error diagnosis
+        const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+        console.error("Add Liquidity Transaction confirmation failed:", confirmation.value.err);
+        console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
+
+        // Parse specific errors from logs
+        const logs = txDetails?.meta?.logMessages || [];
+        if (logs.some(log => log.includes("Error: DisproportionateLiquidity"))) {
+          return { success: false, message: "❌ Failed: DisproportionateLiquidity. Amounts don't match pool ratio." };
+        }
+        if (logs.some(log => log.includes("ConstraintSeeds"))) {
+          // This often means the poolAuthority PDA passed didn't match what the program derived.
+          // Double-check the seeds ("pool") and the mint order used for derivation.
+          return { success: false, message: "❌ Failed: Pool authority PDA mismatch (ConstraintSeeds). Check derivation logic." };
+        }
+        if (logs.some(log => log.includes("ConstraintTokenOwner"))) {
+          return { success: false, message: "❌ Failed: Token account ownership error. Check vault/user accounts." };
+        }
+        // Add more specific error checks based on your program's potential errors
+
+        // Generic failure message
+        throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
+
+      console.log("✅ Liquidity added successfully!");
+      const explorerUrl = getExplorerLink(signature, network);
+
+      return {
+        success: true,
+        message: `Successfully added ${liquidityAmountA} ${tokenASymbol} and ${liquidityAmountB} ${tokenBSymbol} liquidity.`,
+        signature,
+        explorerUrl,
+      };
     }
-
-    console.log("✅ Liquidity added successfully!");
-    const explorerUrl = getExplorerLink(signature, network);
-
-    return {
-      success: true,
-      message: `Successfully added ${liquidityAmountA} ${tokenASymbol} and ${liquidityAmountB} ${tokenBSymbol} liquidity.`,
-      signature,
-      explorerUrl,
-    };
 
   } catch (error: any) {
     console.error("💥 Failed to add liquidity:", error);
@@ -3864,16 +4066,17 @@ export async function getPoolExactRatio(
   try {
     const program = getProgram(connection, null);
 
+    // Get token info (using null for wallet is fine here since we're just reading)
     const tokenAInfo = await getOrCreateToken(connection, null, tokenA, network);
     const tokenBInfo = await getOrCreateToken(connection, null, tokenB, network);
 
-
     if (!tokenAInfo || !tokenBInfo) {
-      throw new Error("Could not find token info");
+      throw new Error(`Could not find token info for ${tokenA} or ${tokenB}`);
     }
 
     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
 
+    // Determine mints (handle SOL)
     let tokenAMint = tokenA.toUpperCase() === "SOL" ? wrappedSolMint : tokenAInfo.mint;
     let tokenBMint = tokenB.toUpperCase() === "SOL" ? wrappedSolMint : tokenBInfo.mint;
 
@@ -3881,66 +4084,68 @@ export async function getPoolExactRatio(
 
     const poolAccount = await program.account.liquidityPool.fetch(poolPda);
 
-    const vaultABalance = new BN((await connection.getTokenAccountBalance(poolAccount.tokenAVault)).value.amount);
-    const vaultBBalance = new BN((await connection.getTokenAccountBalance(poolAccount.tokenBVault)).value.amount);
+    // Get balances from vaults
+    const vaultABalanceResponse = await connection.getTokenAccountBalance(poolAccount.tokenAVault);
+    const vaultBBalanceResponse = await connection.getTokenAccountBalance(poolAccount.tokenBVault);
+    const vaultABalance = new BN(vaultABalanceResponse.value.amount);
+    const vaultBBalance = new BN(vaultBBalanceResponse.value.amount);
 
-    console.log("Vault A Balance (raw):", vaultABalance.toString()); // Log raw balances
-    console.log("Vault B Balance (raw):", vaultBBalance.toString()); // Log raw balances
+    console.log(`Vault A Balance (raw): ${vaultABalance.toString()}`);
+    console.log(`Vault B Balance (raw): ${vaultBBalance.toString()}`);
 
-    // Calculate the exact ratio needed
-    const exactRatio = vaultBBalance.isZero() ? 0 : Number(vaultABalance) / Number(vaultBBalance); // Avoid division by zero
+    // CRITICAL FIX: Match the user's requested tokens to the actual pool ordering
+    // Determine which vault corresponds to which user token
+    let userTokenAVaultBalance, userTokenADecimals;
+    let userTokenBVaultBalance, userTokenBDecimals;
 
-    // Generate nice round numbers that match the ratio
-    const gcd = vaultABalance.isZero() || vaultBBalance.isZero() ? 1 : calculateGCD(vaultABalance.toNumber(), vaultBBalance.toNumber()); // Handle zero balances
-
-    const tokenARatio = vaultABalance.isZero() ? 0 : vaultABalance.toNumber() / gcd;
-    const tokenBRatio = vaultBBalance.isZero() ? 0 : vaultBBalance.toNumber() / gcd;
-
-    // Calculate human-readable values
-    const tokenAValue = Number(vaultABalance) / Math.pow(10, tokenAInfo.decimals);
-    const tokenBValue = Number(vaultBBalance) / Math.pow(10, tokenBInfo.decimals);
-
-    console.log("Token A Value (human):", tokenAValue); // Log human-readable values
-    console.log("Token B Value (human):", tokenBValue); // Log human-readable values
-
-    // Find a simple ratio by dividing by the smaller non-zero value and rounding
-    const scaleFactor = Math.min(tokenAValue > 0 ? tokenAValue : Infinity, tokenBValue > 0 ? tokenBValue : Infinity);
-
-    // Handle cases where one or both values are zero or scaleFactor is Infinity
-    let simpleRatioA = 0;
-    let simpleRatioB = 0;
-    let humanReadableRatio = "Ratio calculation error (zero balance?)";
-
-    if (scaleFactor > 0 && scaleFactor !== Infinity) {
-      simpleRatioA = Math.round((tokenAValue / scaleFactor) * 100) / 100;
-      simpleRatioB = Math.round((tokenBValue / scaleFactor) * 100) / 100;
-      humanReadableRatio = `${simpleRatioA} ${tokenA} : ${simpleRatioB} ${tokenB}`;
-    } else if (tokenAValue > 0 && tokenBValue === 0) {
-      humanReadableRatio = `Pool only contains ${tokenA}. Add ${tokenB} to establish a ratio.`;
-    } else if (tokenBValue > 0 && tokenAValue === 0) {
-      humanReadableRatio = `Pool only contains ${tokenB}. Add ${tokenA} to establish a ratio.`;
+    // Check if pool's token A mint matches user's requested token A
+    if (poolAccount.tokenAMint.equals(tokenAMint)) {
+      // Pool ordering matches user ordering
+      userTokenAVaultBalance = vaultABalance;
+      userTokenBVaultBalance = vaultBBalance;
+      userTokenADecimals = tokenAInfo.decimals;
+      userTokenBDecimals = tokenBInfo.decimals;
     } else {
-      humanReadableRatio = `Pool appears empty. Add initial liquidity.`;
+      // Pool ordering is swapped compared to user request
+      userTokenAVaultBalance = vaultBBalance;
+      userTokenBVaultBalance = vaultABalance;
+      userTokenADecimals = tokenAInfo.decimals;
+      userTokenBDecimals = tokenBInfo.decimals;
     }
 
+    // Convert to human-readable values using CORRECT decimals for EACH token
+    const tokenAValue = Number(userTokenAVaultBalance) / Math.pow(10, userTokenADecimals);
+    const tokenBValue = Number(userTokenBVaultBalance) / Math.pow(10, userTokenBDecimals);
 
-    console.log("Calculated Human Readable Ratio:", humanReadableRatio); // Log the final ratio string
+    console.log(`Token A (${tokenA}) Value (human): ${tokenAValue}`);
+    console.log(`Token B (${tokenB}) Value (human): ${tokenBValue}`);
+
+    // Calculate ratio (A:B)
+    let humanReadableRatio;
+    if (tokenBValue > 0) {
+      const ratio = Math.round((tokenAValue / tokenBValue) * 100) / 100;
+      humanReadableRatio = `${ratio} ${tokenA} : 1 ${tokenB}`;
+    } else if (tokenAValue > 0) {
+      humanReadableRatio = `Pool only contains ${tokenA}. Add ${tokenB} to establish a ratio.`;
+    } else {
+      humanReadableRatio = "Pool appears empty. Add initial liquidity.";
+    }
+
+    console.log(`Calculated Human Readable Ratio: ${humanReadableRatio}`);
 
     return {
-      tokenARatio,
-      tokenBRatio,
-      exactRatio,
-      humanReadableRatio, // Ensure this is correctly assigned
+      tokenARatio: userTokenAVaultBalance.toNumber(),
+      tokenBRatio: userTokenBVaultBalance.toNumber(),
+      exactRatio: tokenBValue > 0 ? tokenAValue / tokenBValue : 0,
+      humanReadableRatio,
     };
   } catch (error: any) {
     console.error("Error getting pool ratio:", error);
-    // Rethrow or return a specific error structure if needed
-    // For now, let's return a default error state
     return {
       tokenARatio: 0,
       tokenBRatio: 0,
       exactRatio: 0,
-      humanReadableRatio: `Error fetching ratio: ${error.message}`
+      humanReadableRatio: `Error: ${error.message}`
     };
   }
 }
@@ -3955,6 +4160,115 @@ function calculateGCD(a: number, b: number): number {
   return a;
 }
 
+// export async function getPoolLiquidity(
+//   connection: Connection,
+//   tokenASymbol: string,
+//   tokenBSymbol: string,
+//   wallet: WalletContextState,
+//   network: "localnet" | "devnet" | "mainnet" = "localnet"
+// ): Promise<{
+//   success: boolean;
+//   message: string;
+//   tokenA?: {
+//     symbol: string;
+//     amount: number;
+//     decimals: number;
+//     usdValue?: number;
+//   };
+//   tokenB?: {
+//     symbol: string;
+//     amount: number;
+//     decimals: number;
+//     usdValue?: number;
+//   };
+//   totalLiquidityUsd?: number;
+// }> {
+//   try {
+//     console.log(`[getPoolLiquidity] Querying pool: ${tokenASymbol}/${tokenBSymbol}...`);
+
+//     const tokenAInfo = await getOrCreateToken(connection, wallet,
+//       tokenASymbol, network);
+
+//     const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+
+//     if (!tokenAInfo || !tokenBInfo) {
+//       return {
+//         success: false,
+//         message: "Failed to find token information"
+//       };
+//     }
+
+//     const program = getProgram(connection, wallet)
+//     const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+//       program.programId,
+//       tokenAInfo.mint,
+//       tokenBInfo.mint,
+//     );
+
+//     try {
+//       const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+
+//       let tokenAVault, tokenBVault;
+//       let tokenAInfo, tokenBInfo;
+//       let tokenASymbolForDisplay, tokenBSymbolForDisplay;
+
+//       // Determine which pool vault corresponds to which token symbol
+//       if (poolAccount.tokenAMint.equals(originalMintA)) {
+//         // Pool mint A matches user's token A
+//         tokenAVault = poolAccount.tokenAVault;
+//         tokenBVault = poolAccount.tokenBVault;
+//         tokenAInfo = tokenAInfo;
+//         tokenBInfo = tokenBInfo;
+//         tokenASymbolForDisplay = tokenASymbol;
+//         tokenBSymbolForDisplay = tokenBSymbol;
+//       } else {
+//         // Pool mint A matches user's token B
+//         tokenAVault = poolAccount.tokenBVault;
+//         tokenBVault = poolAccount.tokenAVault;
+//         tokenAInfo = tokenBInfo;
+//         tokenBInfo = tokenAInfo;
+//         tokenASymbolForDisplay = tokenBSymbol;
+//         tokenBSymbolForDisplay = tokenASymbol;
+//       }
+
+//       // Then use the correct vaults and decimals for conversion
+//       const tokenABalance = await connection.getTokenAccountBalance(tokenAVault)
+//         .then(res => Number(res.value.amount) / Math.pow(10, tokenAInfo.decimals));
+//       const tokenBBalance = await connection.getTokenAccountBalance(tokenBVault)
+//         .then(res => Number(res.value.amount) / Math.pow(10, tokenBInfo.decimals));
+
+
+//       return {
+//         success: true,
+//         message: `Successfully retrieved pool liquidity for ${tokenASymbol}/${tokenBSymbol}`,
+//         tokenA: {
+//           symbol: tokenASymbol,
+//           amount: tokenABalance,
+//           decimals: tokenAInfo.decimals,
+//         },
+//         tokenB: {
+//           symbol: tokenBSymbol,
+//           amount: tokenBBalance,
+//           decimals: tokenBInfo.decimals
+//         },
+//       };
+//     } catch (error: any) {
+//       if (error.message?.includes("Account does not exist")) {
+//         return {
+//           success: false,
+//           message: `No liquidity pool exists for ${tokenASymbol}/${tokenBSymbol}`
+//         }
+//       }
+//       throw error
+//     }
+//   } catch (err: any) {
+//     console.error("Failed to get pool liquidity:", err)
+//     return {
+//       success: false,
+//       message: `Error fetching pool information: ${err.message}`
+//     }
+//   }
+// }
 export async function getPoolLiquidity(
   connection: Connection,
   tokenASymbol: string,
@@ -3981,10 +4295,9 @@ export async function getPoolLiquidity(
   try {
     console.log(`[getPoolLiquidity] Querying pool: ${tokenASymbol}/${tokenBSymbol}...`);
 
-    const tokenAInfo = await getOrCreateToken(connection, wallet,
-      tokenASymbol, network);
-
-    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+    // Get token info for both tokens
+    const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
 
     if (!tokenAInfo || !tokenBInfo) {
       return {
@@ -3993,23 +4306,79 @@ export async function getPoolLiquidity(
       };
     }
 
-    const program = getProgram(connection, wallet)
-    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+    // Store original mints and info for later comparison
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    const tokenAIsSol = tokenASymbol.toUpperCase() === 'SOL';
+    const tokenBIsSol = tokenBSymbol.toUpperCase() === 'SOL';
+    const originalMintA = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+    const originalMintB = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
+
+    console.log(`Original mint A (${tokenASymbol}): ${originalMintA.toString()}`);
+    console.log(`Original mint B (${tokenBSymbol}): ${originalMintB.toString()}`);
+    console.log(`Decimals A: ${tokenAInfo.decimals}, Decimals B: ${tokenBInfo.decimals}`);
+
+    // Get pool information
+    const program = getProgram(connection, wallet);
+    const { poolPda } = await getPoolPDAs(
       program.programId,
-      tokenAInfo.mint,
-      tokenBInfo.mint,
+      originalMintA,
+      originalMintB
     );
 
     try {
       const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+      console.log(`Pool mint A: ${poolAccount.tokenAMint.toString()}`);
+      console.log(`Pool mint B: ${poolAccount.tokenBMint.toString()}`);
 
-      const tokenAVault = poolAccount.tokenAVault;
-      const tokenBVault = poolAccount.tokenBVault;
+      // Track which token corresponds to which vault in the pool
+      let tokenAVaultAddress, tokenBVaultAddress;
+      let tokenADecimals, tokenBDecimals;
 
-      const tokenABalance = await connection.getTokenAccountBalance(tokenAVault).then(res => Number(res.value.amount) / Math.pow(10, tokenAInfo.decimals));
+      // Check if pool's mint A matches our input token A
+      const poolAMatchesInputA = poolAccount.tokenAMint.equals(originalMintA);
 
-      const tokenBBalance = await connection.getTokenAccountBalance(tokenBVault).then(res => Number(res.value.amount) / Math.pow(10, tokenBInfo.decimals));
+      if (poolAMatchesInputA) {
+        // Pool order matches our input order
+        console.log("Pool ordering matches input ordering (A=A, B=B)");
+        tokenAVaultAddress = poolAccount.tokenAVault;
+        tokenBVaultAddress = poolAccount.tokenBVault;
+        tokenADecimals = tokenAInfo.decimals;
+        tokenBDecimals = tokenBInfo.decimals;
+      } else {
+        // Pool order is reversed from our input order
+        console.log("Pool ordering is reversed from input ordering (A=B, B=A)");
+        tokenAVaultAddress = poolAccount.tokenBVault;  // Use pool's B vault for our A token
+        tokenBVaultAddress = poolAccount.tokenAVault;  // Use pool's A vault for our B token
+        tokenADecimals = tokenAInfo.decimals;
+        tokenBDecimals = tokenBInfo.decimals;
+      }
 
+      console.log(`Using vault for ${tokenASymbol}: ${tokenAVaultAddress.toString()}`);
+      console.log(`Using vault for ${tokenBSymbol}: ${tokenBVaultAddress.toString()}`);
+
+      // Get raw balances
+      const tokenAAccountInfo = await connection.getTokenAccountBalance(tokenAVaultAddress);
+      const tokenBAccountInfo = await connection.getTokenAccountBalance(tokenBVaultAddress);
+
+      // Convert using proper decimals
+      const rawAmountA = Number(tokenAAccountInfo.value.amount);
+      const rawAmountB = Number(tokenBAccountInfo.value.amount);
+
+      console.log(`Raw amount A (${tokenASymbol}): ${rawAmountA}`);
+      console.log(`Raw amount B (${tokenBSymbol}): ${rawAmountB}`);
+
+      const tokenABalance = rawAmountA / Math.pow(10, tokenADecimals);
+      const tokenBBalance = rawAmountB / Math.pow(10, tokenBDecimals);
+
+      console.log(`Converted amount A (${tokenASymbol}): ${tokenABalance}`);
+      console.log(`Converted amount B (${tokenBSymbol}): ${tokenBBalance}`);
+
+      // Calculate actual pool ratio for display
+      let requiredRatio = "Unknown ratio";
+      if (tokenBBalance > 0) {
+        const ratio = tokenABalance / tokenBBalance;
+        requiredRatio = `${ratio} ${tokenASymbol} : 1 ${tokenBSymbol}`;
+      }
 
       return {
         success: true,
@@ -4017,13 +4386,14 @@ export async function getPoolLiquidity(
         tokenA: {
           symbol: tokenASymbol,
           amount: tokenABalance,
-          decimals: tokenAInfo.decimals,
+          decimals: tokenADecimals,
         },
         tokenB: {
           symbol: tokenBSymbol,
           amount: tokenBBalance,
-          decimals: tokenBInfo.decimals
+          decimals: tokenBDecimals
         },
+        // requiredRatio,  // Add the calculated ratio to the response
       };
     } catch (error: any) {
       if (error.message?.includes("Account does not exist")) {
@@ -4032,33 +4402,92 @@ export async function getPoolLiquidity(
           message: `No liquidity pool exists for ${tokenASymbol}/${tokenBSymbol}`
         }
       }
-      throw error
+      throw error;
     }
   } catch (err: any) {
-    console.error("Failed to get pool liquidity:", err)
+    console.error("Failed to get pool liquidity:", err);
     return {
       success: false,
       message: `Error fetching pool information: ${err.message}`
-    }
+    };
   }
 }
 
+// export async function unwrapSol(
+//   connection: Connection,
+//   wallet: any
+// ): Promise<{
+//   success: boolean,
+//   message: string,
+//   signature?: string
+// }> {
+//   try {
+//     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+//     const userWsolAccount = await getAssociatedTokenAddress(wrappedSolMint, wallet.publicKey);
+
+//     // Check if account exists
+//     let accountInfo;
+//     try {
+//       accountInfo = await connection.getAccountInfo(userWsolAccount);
+//     } catch (e) { }
+
+//     if (!accountInfo) {
+//       return { success: false, message: "You don't have any wrapped SOL to unwrap." };
+//     }
+
+//     // Create close instruction
+//     const tx = new Transaction().add(
+//       createCloseAccountInstruction(
+//         userWsolAccount,
+//         wallet.publicKey,
+//         wallet.publicKey,
+//       )
+//     );
+
+//     const signature = await wallet.sendTransaction(tx, connection);
+//     await connection.confirmTransaction(signature);
+
+//     return {
+//       success: true,
+//       message: "Successfully unwrapped all SOL to native SOL.",
+//       signature
+//     };
+//   } catch (error: any) {
+//     return { success: false, message: `Failed to unwrap SOL: ${error.message}` };
+//   }
+// }
+
 export async function unwrapSol(
   connection: Connection,
-  wallet: any
+  wallet: any,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
 ): Promise<{
   success: boolean,
   message: string,
-  signature?: string
+  signature?: string,
+  explorerUrl?: string
 }> {
   try {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      return { success: false, message: "Wallet not connected or doesn't support signing." };
+    }
+
+    // Get network-specific connection
+    let activeConnection = connection;
+    if (network === "devnet") {
+      activeConnection = new Connection(
+        "https://api.devnet.solana.com",
+        { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+      );
+    }
+
     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
     const userWsolAccount = await getAssociatedTokenAddress(wrappedSolMint, wallet.publicKey);
 
     // Check if account exists
     let accountInfo;
     try {
-      accountInfo = await connection.getAccountInfo(userWsolAccount);
+      accountInfo = await activeConnection.getAccountInfo(userWsolAccount);
     } catch (e) { }
 
     if (!accountInfo) {
@@ -4074,15 +4503,94 @@ export async function unwrapSol(
       )
     );
 
-    const signature = await wallet.sendTransaction(tx, connection);
-    await connection.confirmTransaction(signature);
+    // Handle transaction sending based on network
+    if (network === "devnet") {
+      let signature;
+      let attempts = 0;
+      const maxAttempts = 3;
 
-    return {
-      success: true,
-      message: "Successfully unwrapped all SOL to native SOL.",
-      signature
-    };
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`Devnet unwrap transaction attempt ${attempts}/${maxAttempts}`);
+
+          // Get fresh blockhash for each attempt
+          const { blockhash, lastValidBlockHeight } = await activeConnection.getLatestBlockhash('confirmed');
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = wallet.publicKey;
+
+          // Sign transaction first
+          const signedTx = await wallet.signTransaction(tx);
+
+          // Send raw transaction
+          console.log("Sending raw unwrap transaction to devnet...");
+          signature = await activeConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed'
+          });
+
+          console.log(`Unwrap transaction sent: ${signature}`);
+
+          // Wait for confirmation with timeout
+          const confirmation = await activeConnection.confirmTransaction({
+            signature,
+            blockhash,
+            lastValidBlockHeight
+          }, 'confirmed');
+
+          if (confirmation.value.err) {
+            throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          }
+
+          console.log("Unwrap transaction confirmed!");
+          const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+
+          return {
+            success: true,
+            message: "Successfully unwrapped all SOL to native SOL.",
+            signature,
+            explorerUrl
+          };
+        } catch (error: any) {
+          console.warn(`Unwrap attempt ${attempts} failed:`, error);
+
+          if (attempts >= maxAttempts) {
+            throw error;
+          }
+
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, attempts - 1);
+          console.log(`Waiting ${delay}ms before next unwrap attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+
+      throw new Error("Failed after all retry attempts");
+    } else {
+      // Original code for localnet
+      const { blockhash } = await activeConnection.getLatestBlockhash('confirmed');
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = wallet.publicKey;
+
+      const signature = await wallet.sendTransaction(tx, activeConnection);
+      await activeConnection.confirmTransaction(signature);
+
+      const explorerUrl = network === "mainnet"
+        ? `https://explorer.solana.com/tx/${signature}`
+        : `https://explorer.solana.com/tx/${signature}?cluster=${network}`;
+
+      return {
+        success: true,
+        message: "Successfully unwrapped all SOL to native SOL.",
+        signature,
+        explorerUrl
+      };
+    }
   } catch (error: any) {
-    return { success: false, message: `Failed to unwrap SOL: ${error.message}` };
+    console.error("Failed to unwrap SOL:", error);
+    return {
+      success: false,
+      message: `Failed to unwrap SOL: ${error.message || error.toString()}`
+    };
   }
 }

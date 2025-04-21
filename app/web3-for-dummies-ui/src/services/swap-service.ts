@@ -1,9 +1,9 @@
-import { Connection, PublicKey, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { BN } from "@coral-xyz/anchor"
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import { getOrCreateToken } from './tokens-service';
 import { executePoolSwap, getPoolPDAs, getProgram } from './solana-service';
-import { createAssociatedTokenAccountInstruction, createCloseAccountInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { createAssociatedTokenAccountInstruction, createCloseAccountInstruction, createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 export { executePoolSwap } from './solana-service';
 
@@ -399,6 +399,38 @@ export async function executeSwap(
     // TODO: Add ATA creation instruction for userDestinationTokenAccount if needed
 
     console.log("[executeSwap] Checking if destination token account exists...");
+
+    if (fromIsSol) {
+      console.log("[executeSwap] Adding instructions to wrap SOL...");
+
+      // Create the wSOL account if it doesn't exist
+      let wsolAccountInfo = await connection.getAccountInfo(userSourceTokenAccount);
+
+      if (!wsolAccountInfo) {
+        console.log("[executeSwap] Creating wrapped SOL account...");
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            authority,                // Payer
+            userSourceTokenAccount,   // Associated token account address
+            authority,                // Owner
+            wrappedSolMint           // Mint
+          )
+        );
+      }
+
+      // Fund the wSOL account with native SOL - this performs the wrapping
+      console.log(`[executeSwap] Wrapping ${amountIn} SOL...`);
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: authority,
+          toPubkey: userSourceTokenAccount,
+          lamports: amountInBaseUnits.toNumber()
+        }),
+        createSyncNativeInstruction(userSourceTokenAccount)
+      );
+    }
+
+
     let destinationAccountInfo = await connection.getAccountInfo(userDestinationTokenAccount);
 
     if (!destinationAccountInfo) {
@@ -461,44 +493,125 @@ export async function executeSwap(
 
     // 7. Send and Confirm
     console.log("Sending swap transaction...");
-    const signature = await wallet.sendTransaction(tx, connection);
-    console.log("Swap transaction sent:", signature);
 
-    const confirmation = await connection.confirmTransaction(signature, "confirmed");
-    if (confirmation.value.err) {
-      const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-      console.error("Swap Transaction confirmation error details:", confirmation.value.err);
-      console.error("Transaction logs:", txDetails?.meta?.logMessages);
-      throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
-    }
-    let successMessage = '';
-    if (toIsSol) {
-      successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. \nYour SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap using the "unwrap sol" command.`;
+    let signature;
+
+    if (network === "devnet") {
+      // Devnet-specific handling with retry logic
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`Devnet swap transaction attempt ${attempts}/${maxAttempts}`);
+
+          // Create a fresh connection with better timeout settings for devnet
+          const devnetConnection = new Connection(
+            "https://api.devnet.solana.com",
+            { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+          );
+
+          // Get fresh blockhash for each attempt
+          const { blockhash, lastValidBlockHeight } = await devnetConnection.getLatestBlockhash('confirmed');
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = authority;
+
+          // Sign transaction first to avoid timeout issues
+          const signedTx = await wallet.signTransaction(tx);
+
+          // Send raw transaction
+          console.log("Sending raw transaction to devnet...");
+          signature = await devnetConnection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed'
+          });
+
+          console.log(`Transaction sent: ${signature}`);
+
+          // Wait for confirmation
+          const confirmation = await devnetConnection.confirmTransaction({
+            signature,
+            blockhash,
+            lastValidBlockHeight
+          }, 'confirmed');
+
+          if (confirmation.value.err) {
+            throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+          }
+
+          console.log("Swap transaction confirmed!");
+          break; // Exit the retry loop on success
+        } catch (error: any) {
+          console.warn(`Swap attempt ${attempts} failed:`, error);
+
+          // If hitting last attempt, throw the error
+          if (attempts >= maxAttempts) {
+            throw error;
+          }
+
+          // Exponential backoff
+          const delay = 2000 * Math.pow(2, attempts - 1);
+          console.log(`Waiting ${delay}ms before next swap attempt...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+
+      // Add return statement here - this is what was missing
+      let successMessage = '';
+      if (toIsSol) {
+        successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. \nYour SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap using the "unwrap sol" command.`;
+      } else {
+        successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} ${toTokenSymbol}.`;
+      }
+
+      return {
+        success: true,
+        message: successMessage,
+        signature,
+        explorerUrl: signature ? getExplorerLink(signature, network) : '',
+        outputAmount: actualOutputAmount,
+      };
     } else {
-      successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} ${toTokenSymbol}.`;
+      const signature = await wallet.sendTransaction(tx, connection);
+      console.log("Swap transaction sent:", signature);
+
+      const confirmation = await connection.confirmTransaction(signature, "confirmed");
+      if (confirmation.value.err) {
+        const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+        console.error("Swap Transaction confirmation error details:", confirmation.value.err);
+        console.error("Transaction logs:", txDetails?.meta?.logMessages);
+        throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+      }
+      let successMessage = '';
+      if (toIsSol) {
+        successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. \nYour SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap using the "unwrap sol" command.`;
+      } else {
+        successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} ${toTokenSymbol}.`;
+      }
+
+      console.log("Swap successful!");
+      const explorerUrl = getExplorerLink(signature, network); // Use helper
+
+      // TODO: Fetch actual output amount from transaction details if possible
+      // const actualOutputAmount = quote.expectedOutputAmount; // Placeholder
+
+      // return {
+      //   success: true,
+      //   message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. 
+      //             Your SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap.`,
+      //   signature,
+      //   explorerUrl,
+      //   outputAmount: actualOutputAmount,
+      // };
+      return {
+        success: true,
+        message: successMessage,
+        signature,
+        explorerUrl: getExplorerLink(signature, network),
+        outputAmount: actualOutputAmount,
+      };
     }
-
-    console.log("Swap successful!");
-    const explorerUrl = getExplorerLink(signature, network); // Use helper
-
-    // TODO: Fetch actual output amount from transaction details if possible
-    // const actualOutputAmount = quote.expectedOutputAmount; // Placeholder
-
-    // return {
-    //   success: true,
-    //   message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. 
-    //             Your SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap.`,
-    //   signature,
-    //   explorerUrl,
-    //   outputAmount: actualOutputAmount,
-    // };
-    return {
-      success: true,
-      message: successMessage,
-      signature,
-      explorerUrl: getExplorerLink(signature, network),
-      outputAmount: actualOutputAmount,
-    };
   } catch (error: any) {
     console.error("Failed to execute swap:", error);
     let message = `Failed to execute swap: ${error.message || error.toString()}`;

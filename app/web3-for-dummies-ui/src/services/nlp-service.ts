@@ -3,7 +3,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createLogger } from "@/utils/logger";
 
 const logger = createLogger("NLP-Service");
+let currentNetworkContext: "localnet" | "devnet" | "mainnet" = "localnet";
 
+export function setNetworkContext(network: "localnet" | "devnet" | "mainnet"): void {
+  console.log(`Setting network context to: ${network}`);
+  currentNetworkContext = network;
+}
+
+export function getNetworkContext(): "localnet" | "devnet" | "mainnet" {
+  return currentNetworkContext;
+}
 const parsedCommandCache: Record<string, PaymentInstruction> = {};
 
 // Predefined responses for common queries
@@ -464,9 +473,23 @@ export async function parsePaymentInstruction(message: string): Promise<PaymentI
 
     const normalizedInput = message.trim().toLowerCase();
 
+    if (normalizedInput.includes("devnet")) {
+      setNetworkContext("devnet")
+    } else if (normalizedInput.includes("mainnet")) {
+      setNetworkContext("mainnet")
+    } else if (normalizedInput.includes("localnet")) {
+      setNetworkContext("localnet")
+    }
+
     if (COMMON_PATTERNS[normalizedInput]) {
       logger.debug('Using predefined pattern match');
-      return COMMON_PATTERNS[normalizedInput];
+
+      const pattern = { ...COMMON_PATTERNS[normalizedInput] }
+
+      if ('network' in pattern) {
+        pattern.network = currentNetworkContext;
+      }
+      return pattern;
     }
 
     if (parsedCommandCache[normalizedInput]) {
@@ -723,7 +746,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       toToken: parsedResult.toToken || undefined,   // Extract toToken
       estimatedReceiveAmount: parsedResult.estimatedReceiveAmount || undefined,
       recipient: parsedResult.recipient || undefined,
-      network: parsedResult.network || "localnet",
+      network: parsedResult.network || currentNetworkContext,
       confidence: parsedResult.confidence || 0.8,
       raw: parsedResult
     };
@@ -747,10 +770,13 @@ function parseWithRegex(message: string): PaymentInstruction {
 
   if (lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
     network = "devnet";
+    setNetworkContext("devnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
     network = "mainnet";
+    setNetworkContext("mainnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
-    network = "localnet"
+    network = "localnet";
+    setNetworkContext("localnet"); // Update context when explicitly specified
   }
 
   const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
