@@ -3,7 +3,7 @@ import { BN } from "@coral-xyz/anchor"
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import { getOrCreateToken } from './tokens-service';
 import { executePoolSwap, getPoolPDAs, getProgram } from './solana-service';
-import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { createCloseAccountInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 export { executePoolSwap } from './solana-service';
 
@@ -397,7 +397,7 @@ export async function executeSwap(
     const tx = new Transaction();
     // TODO: Add wSOL wrapping instructions if fromIsSol
     // TODO: Add ATA creation instruction for userDestinationTokenAccount if needed
-
+    const actualOutputAmount = quote.expectedOutputAmount;
     // Add the Swap instruction
     // Ensure account names match your Rust program's Swap struct
     tx.add(
@@ -419,6 +419,27 @@ export async function executeSwap(
         },
       })
     );
+    // let actualOutputAmount = quote.expectedOutputAmount; // Default to expected amount
+
+    // if (toIsSol) {
+    //   // Get the ATA that holds the wSOL
+    //   const userWsolAccount = await getAssociatedTokenAddress(
+    //     wrappedSolMint,
+    //     authority
+    //   );
+
+    //   // Get the wSOL amount for tracking
+    //   const wsolBalance = await connection.getTokenAccountBalance(userWsolAccount)
+    //     .then(res => new BN(res.value.amount))
+    //     .catch(() => minAmountOutBaseUnits);
+
+    //   const actualOutputAmountRaw = wsolBalance;
+    //   actualOutputAmount = Number(wsolBalance.toString()) / Math.pow(10, toDecimals);
+
+    //   // DON'T automatically close the account!
+    //   // Let the user decide when to unwrap their SOL
+
+    // }
     // TODO: Add wSOL unwrapping instructions if toIsSol
 
     // 7. Send and Confirm
@@ -433,21 +454,34 @@ export async function executeSwap(
       console.error("Transaction logs:", txDetails?.meta?.logMessages);
       throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
     }
+    let successMessage = '';
+    if (toIsSol) {
+      successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. \nYour SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap using the "unwrap sol" command.`;
+    } else {
+      successMessage = `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} ${toTokenSymbol}.`;
+    }
 
     console.log("Swap successful!");
     const explorerUrl = getExplorerLink(signature, network); // Use helper
 
     // TODO: Fetch actual output amount from transaction details if possible
-    const actualOutputAmount = quote.expectedOutputAmount; // Placeholder
+    // const actualOutputAmount = quote.expectedOutputAmount; // Placeholder
 
+    // return {
+    //   success: true,
+    //   message: `Successfully swapped ${amountIn} ${fromTokenSymbol} for ${actualOutputAmount.toFixed(6)} SOL. 
+    //             Your SOL is stored as wrapped SOL (wSOL) which you can use for future swaps or unwrap.`,
+    //   signature,
+    //   explorerUrl,
+    //   outputAmount: actualOutputAmount,
+    // };
     return {
       success: true,
-      message: `Successfully swapped ${fromTokenSymbol} for ${toTokenSymbol}.`,
+      message: successMessage,
       signature,
-      explorerUrl,
+      explorerUrl: getExplorerLink(signature, network),
       outputAmount: actualOutputAmount,
     };
-
   } catch (error: any) {
     console.error("Failed to execute swap:", error);
     let message = `Failed to execute swap: ${error.message || error.toString()}`;

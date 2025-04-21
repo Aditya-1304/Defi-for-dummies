@@ -1,7 +1,7 @@
 // src/services/solana-service.ts
 import { PublicKey, Transaction, Connection, Keypair, SystemProgram, LAMPORTS_PER_SOL, TransactionInstruction } from '@solana/web3.js';
 import { AnchorProvider, BN, Idl, Program, web3, } from '@coral-xyz/anchor';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount, getAccount, Account as TokenAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount, getAccount, Account as TokenAccount, createCloseAccountInstruction } from '@solana/spl-token';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
 import { getOrCreateToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 import { Web3ForDummies } from '@/public/idl/types/web3_for_dummies';
@@ -4040,5 +4040,49 @@ export async function getPoolLiquidity(
       success: false,
       message: `Error fetching pool information: ${err.message}`
     }
+  }
+}
+
+export async function unwrapSol(
+  connection: Connection,
+  wallet: any
+): Promise<{
+  success: boolean,
+  message: string,
+  signature?: string
+}> {
+  try {
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    const userWsolAccount = await getAssociatedTokenAddress(wrappedSolMint, wallet.publicKey);
+
+    // Check if account exists
+    let accountInfo;
+    try {
+      accountInfo = await connection.getAccountInfo(userWsolAccount);
+    } catch (e) { }
+
+    if (!accountInfo) {
+      return { success: false, message: "You don't have any wrapped SOL to unwrap." };
+    }
+
+    // Create close instruction
+    const tx = new Transaction().add(
+      createCloseAccountInstruction(
+        userWsolAccount,
+        wallet.publicKey,
+        wallet.publicKey,
+      )
+    );
+
+    const signature = await wallet.sendTransaction(tx, connection);
+    await connection.confirmTransaction(signature);
+
+    return {
+      success: true,
+      message: "Successfully unwrapped all SOL to native SOL.",
+      signature
+    };
+  } catch (error: any) {
+    return { success: false, message: `Failed to unwrap SOL: ${error.message}` };
   }
 }
