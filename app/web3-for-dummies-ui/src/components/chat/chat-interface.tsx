@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send, WalletMinimal } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio, getPoolLiquidity } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
@@ -774,6 +774,58 @@ export function ChatInterface() {
           }
         }
       }
+    }
+    else if (parsedInstruction.isPoolLiquidityCheck) {
+      console.log("Handling as POOL LIQUIDITY CHECK request:", parsedInstruction);
+      if (!wallet.connected || !wallet.publicKey) {
+        addAIMessage("Please connect your wallet to check pool liquidity.");
+      } else {
+        const tokenA = parsedInstruction.tokenA || '';
+        const tokenB = parsedInstruction.tokenB || '';
+        
+        if (!tokenA || !tokenB) {
+          addAIMessage("Please specify both tokens to check pool liquidity (e.g., 'check pool SOL USDC').");
+        } else {
+          addAIMessage(`Checking liquidity for ${tokenA}/${tokenB} pool on ${effectiveNetwork}...`);
+          
+          try {
+            // Fetch both liquidity info and ratio info in parallel for efficiency
+            const [liquidityResult, ratioResult] = await Promise.all([
+              getPoolLiquidity(
+                connection, tokenA, tokenB, wallet,
+                effectiveNetwork as "localnet" | "devnet" | "mainnet"
+              ),
+              getPoolExactRatio(
+                connection, tokenA, tokenB,
+                effectiveNetwork as "localnet" | "devnet" | "mainnet"
+              )
+            ]);
+            
+            if (liquidityResult.success) {
+              const tokenAAmount = liquidityResult.tokenA?.amount.toFixed(4);
+              const tokenBAmount = liquidityResult.tokenB?.amount.toFixed(4);
+              
+              // Use the human-readable ratio from getPoolExactRatio
+              const ratioDisplay = ratioResult.humanReadableRatio ? 
+                `\n• Required Ratio: ${ratioResult.humanReadableRatio}` : '';
+              
+              addAIMessage(
+                `📊 **${tokenA}/${tokenB} Pool Liquidity:**\n` +
+                `• ${tokenA}: ${tokenAAmount}\n` +
+                `• ${tokenB}: ${tokenBAmount}${ratioDisplay}\n\n` +
+                `To add liquidity to this pool, use: \`add liquidity ${tokenA} ${tokenB} <amount> <amount>\` with the ratio shown above.`
+              );
+            } else {
+              addAIMessage(`❌ ${liquidityResult.message}`);
+            }
+          } catch (error: any) {
+            console.error("Error checking pool liquidity:", error);
+            addAIMessage(`❌ Error checking pool liquidity: ${error.message}`);
+          }
+        }
+      }
+      setIsLoading(false);
+      return;
     }
       // if (parsedInstruction.isBalanceCheck) {
       //   setIsLoading(true);

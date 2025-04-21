@@ -370,6 +370,22 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     network: 'localnet',
     confidence: 0.9,
   },
+  'check pool sol usdc': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'SOL',
+    tokenB: 'USDC',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'check pool usdc sol': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'USDC',
+    tokenB: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  }
 };
 
 export interface PaymentInstruction {
@@ -381,6 +397,7 @@ export interface PaymentInstruction {
   isSwapRequest?: boolean;
   isAddLiquidity?: boolean;
   isCreatePool?: boolean;
+  isPoolLiquidityCheck?: boolean;
   tokenA?: string;
   tokenB?: string;
   amountA?: number;
@@ -509,15 +526,20 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     19. Is this a request to remove specific tokens? (true/false)
     20. Is this a request to burn specific tokens? (true/false)
     21. Is this a request to create a pool? (true/false)
+    22. Is this a request to check pool liquidity? (true/false)
 
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
 
     for token swap request? (true/false)
-      - If true, set isPayment to false.
-      - Extract from_token, to_token, and amount if present.
-      - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
-      - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+    - If true, set isPayment to false.
+    - Extract from_token, to_token, and amount if present.
+    - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
+    - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+
+    For pool liquidity checks:
+    - "check pool liquidity sol usdc" -> isPoolLiquidityCheck = true, tokenA = "SOL", tokenB = "USDC"
+    - "show pool details for usdc/nix" -> isPoolLiquidityCheck = true, tokenA = "USDC", tokenB = "NIX"
 
     
     For balance check requests:
@@ -585,6 +607,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isSwapRequest": true/false,
       "isAddLiquidity": true/false,
       "isCreatePool": true/false,
+      "isPoolLiquidityCheck": true/false,
       "tokenA" : "token symbol" or null,
       "tokenB" : "token symbol" or null,
       "amountA": number or null,
@@ -629,6 +652,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isSwapRequest: !!parsedResult.isSwapRequest, // Extract swap flag
       isAddLiquidity: !!parsedResult.isAddLiquidity,
       isCreatePool: !!parsedResult.isCreatePool,
+      isPoolLiquidityCheck: !!parsedResult.isPoolLiquidityCheck,
       tokenA: parsedResult.tokenA || undefined,
       tokenB: parsedResult.tokenB || undefined,
       amountA: parsedResult.amountA !== null && parsedResult.amountA !== undefined

@@ -3954,3 +3954,91 @@ function calculateGCD(a: number, b: number): number {
   }
   return a;
 }
+
+export async function getPoolLiquidity(
+  connection: Connection,
+  tokenASymbol: string,
+  tokenBSymbol: string,
+  wallet: WalletContextState,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{
+  success: boolean;
+  message: string;
+  tokenA?: {
+    symbol: string;
+    amount: number;
+    decimals: number;
+    usdValue?: number;
+  };
+  tokenB?: {
+    symbol: string;
+    amount: number;
+    decimals: number;
+    usdValue?: number;
+  };
+  totalLiquidityUsd?: number;
+}> {
+  try {
+    console.log(`[getPoolLiquidity] Querying pool: ${tokenASymbol}/${tokenBSymbol}...`);
+
+    const tokenAInfo = await getOrCreateToken(connection, wallet,
+      tokenASymbol, network);
+
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+
+    if (!tokenAInfo || !tokenBInfo) {
+      return {
+        success: false,
+        message: "Failed to find token information"
+      };
+    }
+
+    const program = getProgram(connection, wallet)
+    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+      program.programId,
+      tokenAInfo.mint,
+      tokenBInfo.mint,
+    );
+
+    try {
+      const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+
+      const tokenAVault = poolAccount.tokenAVault;
+      const tokenBVault = poolAccount.tokenBVault;
+
+      const tokenABalance = await connection.getTokenAccountBalance(tokenAVault).then(res => Number(res.value.amount) / Math.pow(10, tokenAInfo.decimals));
+
+      const tokenBBalance = await connection.getTokenAccountBalance(tokenBVault).then(res => Number(res.value.amount) / Math.pow(10, tokenBInfo.decimals));
+
+
+      return {
+        success: true,
+        message: `Successfully retrieved pool liquidity for ${tokenASymbol}/${tokenBSymbol}`,
+        tokenA: {
+          symbol: tokenASymbol,
+          amount: tokenABalance,
+          decimals: tokenAInfo.decimals,
+        },
+        tokenB: {
+          symbol: tokenBSymbol,
+          amount: tokenBBalance,
+          decimals: tokenBInfo.decimals
+        },
+      };
+    } catch (error: any) {
+      if (error.message?.includes("Account does not exist")) {
+        return {
+          success: false,
+          message: `No liquidity pool exists for ${tokenASymbol}/${tokenBSymbol}`
+        }
+      }
+      throw error
+    }
+  } catch (err: any) {
+    console.error("Failed to get pool liquidity:", err)
+    return {
+      success: false,
+      message: `Error fetching pool information: ${err.message}`
+    }
+  }
+}
