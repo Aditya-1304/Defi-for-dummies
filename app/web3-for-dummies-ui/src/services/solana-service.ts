@@ -1,7 +1,7 @@
 // src/services/solana-service.ts
-import { PublicKey, Transaction, Connection, Keypair, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, Transaction, Connection, Keypair, SystemProgram, LAMPORTS_PER_SOL, TransactionInstruction } from '@solana/web3.js';
 import { AnchorProvider, BN, Idl, Program, web3, } from '@coral-xyz/anchor';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, MintLayout, createTransferInstruction, createSyncNativeInstruction, getOrCreateAssociatedTokenAccount, getAccount, Account as TokenAccount } from '@solana/spl-token';
 import idl from '../public/idl/web3_for_dummies.json'; // Import your IDL JSON
 import { getOrCreateToken, mintMoreTokens, tokenCache, KNOWN_TOKENS } from './tokens-service';
 import { Web3ForDummies } from '@/public/idl/types/web3_for_dummies';
@@ -109,29 +109,130 @@ const calculateExpectedOut = (amountIn: BN, reserveIn: BN, reserveOut: BN): BN =
   return new BN(amountOutU128.toString());
 }
 
-export async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey): Promise<{ poolPda: PublicKey; poolAuthorityPda: PublicKey; poolBump: number }> {
-  const [mintAKey, mintBKey] = [mintA, mintB].sort((a, b) => a.toBuffer().compare(b.toBuffer()));
+// export async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey): Promise<{ poolPda: PublicKey; poolAuthorityPda: PublicKey; poolBump: number }> {
+//   const [mintAKey, mintBKey] = [mintA, mintB].sort((a, b) => a.toBuffer().compare(b.toBuffer()));
 
+//   const [poolPda, poolBump] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("pool"),
+//       mintAKey.toBuffer(),
+//       mintBKey.toBuffer(),
+//     ],
+//     programId
+//   );
+
+//   const [poolAuthorityPda] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("pool"),
+//       mintAKey.toBuffer(),
+//       mintBKey.toBuffer(),
+//     ],
+//     programId
+//   );
+
+//   return { poolPda, poolAuthorityPda, poolBump }
+
+// }
+// export async function getPoolPDAs(programId: PublicKey, mintA: PublicKey, mintB: PublicKey): Promise<{
+//   poolPda: PublicKey;
+//   poolAuthorityPda: PublicKey;
+//   poolBump: number;
+//   vaultAPda: PublicKey; // Added vaultAPda
+//   vaultBPda: PublicKey; // Added vaultBPda
+//   lpMintPda: PublicKey; // Added lpMintPda
+// }> {
+//   const [mintAKey, mintBKey] = [mintA, mintB].sort((a, b) => a.toBuffer().compare(b.toBuffer()));
+
+//   const [poolPda, poolBump] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("pool"),
+//       mintAKey.toBuffer(),
+//       mintBKey.toBuffer(),
+//     ],
+//     programId
+//   );
+
+//   // Pool authority PDA might be the same as poolPda or derived differently depending on your program
+//   // Assuming it's derived the same way for this example, adjust if needed based on your program logic
+//   const [poolAuthorityPda] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("pool_authority"), // Or just "pool" if authority is the pool account itself
+//       mintAKey.toBuffer(),
+//       mintBKey.toBuffer(),
+//     ],
+//     programId
+//   );
+
+//   // Derive Vault PDAs (assuming standard derivation, adjust if your program uses different seeds)
+//   const [vaultAPda] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("vault_a"),
+//       poolPda.toBuffer(), // Often derived from the pool PDA
+//     ],
+//     programId
+//   );
+
+//   const [vaultBPda] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("vault_b"),
+//       poolPda.toBuffer(), // Often derived from the pool PDA
+//     ],
+//     programId
+//   );
+
+//   // Derive LP Mint PDA (assuming standard derivation)
+//   const [lpMintPda] = await PublicKey.findProgramAddressSync(
+//     [
+//       Buffer.from("lp_mint"),
+//       poolPda.toBuffer(), // Often derived from the pool PDA
+//     ],
+//     programId
+//   );
+
+
+//   return { poolPda, poolAuthorityPda, poolBump, vaultAPda, vaultBPda, lpMintPda }; // Return all derived PDAs
+
+// }
+export async function getPoolPDAs(
+  programId: PublicKey,
+  mintA: PublicKey, // Can be unsorted
+  mintB: PublicKey  // Can be unsorted
+): Promise<{
+  poolPda: PublicKey;
+  poolAuthorityPda: PublicKey;
+  poolBump: number; // Assuming your Rust code uses the same bump for both
+}> {
+  // Sort mints internally to ensure consistent PDA derivation
+  // const [sortedMintA, sortedMintB] = [mintA, mintB].sort((a, b) =>
+  //   a.toBuffer().compare(b.toBuffer())
+  // );
+  const [sortedMintA, sortedMintB] = [mintA, mintB].sort((a, b) =>
+    a.toBuffer().compare(b.toBuffer()) // <-- **UNCOMMENT THIS**
+  );
+
+  // Derive poolPda using SORTED mints and "pool" seed
   const [poolPda, poolBump] = await PublicKey.findProgramAddressSync(
     [
       Buffer.from("pool"),
-      mintAKey.toBuffer(),
-      mintBKey.toBuffer(),
+      sortedMintA.toBuffer(), // Use sorted mint A
+      sortedMintB.toBuffer(), // Use sorted mint B
     ],
     programId
   );
 
+  // Derive poolAuthorityPda using SORTED mints and "pool" seed
+  // IMPORTANT: Ensure your Rust program uses the *same seeds* for pool and authority
+  // If seeds differ (e.g., "pool_authority"), adjust the Buffer.from() accordingly.
   const [poolAuthorityPda] = await PublicKey.findProgramAddressSync(
     [
-      Buffer.from("pool"),
-      mintAKey.toBuffer(),
-      mintBKey.toBuffer(),
+      Buffer.from("pool"), // Assuming same seed as poolPda
+      sortedMintA.toBuffer(), // Use sorted mint A
+      sortedMintB.toBuffer(), // Use sorted mint B
     ],
     programId
   );
 
-  return { poolPda, poolAuthorityPda, poolBump }
-
+  return { poolPda, poolAuthorityPda, poolBump };
 }
 
 
@@ -747,8 +848,18 @@ export async function executePayment(
       const upperSymbol = token.toUpperCase();
       let tokenInfo;
 
+
       try {
         tokenInfo = await getOrCreateToken(networkConnection, wallet, upperSymbol, network);
+        if (!tokenInfo) {
+          // Handle the case where the token couldn't be found or created
+          console.error(`Failed to get or create token info for ${upperSymbol}`);
+          return {
+            success: false,
+            error: `Token not found or could not be created: ${upperSymbol}`,
+            message: `Could not find or create token: ${upperSymbol}. Cannot proceed with payment.`
+          };
+        }
       } catch (error) {
         console.error(`Failed to get token info for ${upperSymbol}:`, error);
         return {
@@ -1120,7 +1231,7 @@ export async function mintTestTokens(
         console.log(`Creating new custom token: ${tokenSymbol} on devnet`);
 
         // Create new token mint with 9 decimals (or 6 for USDC-like tokens)
-        const decimals = tokenSymbol.includes('USDC') ? 6 : 9;
+        const decimals = tokenSymbol.includes('USDC') ? 6 : 6;
 
         // Create the mint
         const mintKeypair = web3.Keypair.generate();
@@ -1967,6 +2078,7 @@ async function consolidateTokenMappings(
 
 export async function executePoolSwap(
   connection: Connection,
+  _originalConnection: Connection,
   wallet: any,
   fromTokenSymbol: string,
   toTokenSymbol: string,
@@ -1982,7 +2094,7 @@ export async function executePoolSwap(
   outputAmount?: number;
   error?: any;
 }> {
-
+  console.log(">>> executePoolSwap FUNCTION ENTERED <<<");
   console.log(`🔄 Intializing pool swap: ${amountIn} ${fromTokenSymbol} -> ${toTokenSymbol} on ${network}`);
 
   if (!wallet.publicKey || !wallet.signTransaction) {
@@ -1990,6 +2102,10 @@ export async function executePoolSwap(
   }
 
   try {
+
+    const connection = new Connection(NETWORK_URLS[network], "confirmed");
+    console.log(`  Using FRESH connection endpoint: ${connection.rpcEndpoint}`);
+
     const program = getProgram(connection, wallet);
 
     console.log("  Fetching mint addresses...");
@@ -2028,6 +2144,10 @@ export async function executePoolSwap(
 
     console.log(" Deriving pool PDAs...");
     const { poolPda, poolAuthorityPda } = await getPoolPDAs(program.programId, fromMint, toMint);
+    console.log(`  Derived Pool PDA for fetch: ${poolPda.toBase58()}`);
+    console.log(`  Using connection endpoint: ${connection.rpcEndpoint}`);
+    console.log(`  Program ID used: ${program.programId.toBase58()}`);
+
     console.log(` Pool PDA: ${poolPda.toBase58()}`);
     console.log(` Pool Authority PDA: ${poolAuthorityPda.toBase58()}`);
 
@@ -2035,8 +2155,18 @@ export async function executePoolSwap(
     console.log("  Fetching pool state account...");
     let poolAccount: any;
     try {
-      poolAccount = await program.account.liquidityPool.fetch(poolPda);
-      console.log(" Pool account fetched successfully.");
+
+      console.log(`  Attempting manual getAccountInfo for ${poolPda.toBase58()}...`);
+      const accountInfo = await connection.getAccountInfo(poolPda); // Use fresh connection
+      if (!accountInfo) {
+        console.error(`  MANUAL FETCH FAILED: Account ${poolPda.toBase58()} not found via connection.`);
+      } else {
+        console.log(`  MANUAL FETCH SUCCEEDED: Owner ${accountInfo.owner.toBase58()}, Length ${accountInfo.data.length}`);
+      }
+
+      poolAccount = await program.account.liquidityPool.fetch(poolPda); // Anchor uses the provider's connection
+      console.log(" Pool account fetched successfully via Anchor.");
+
     } catch (e) {
       console.error("Error fetching pool account:", e);
       return {
@@ -2145,18 +2275,25 @@ export async function executePoolSwap(
     console.log(" Building swap instruction...");
     const swapIx = await program.methods
       .swap(amountInBN, minAmountOutBN)
+      // *** START CHANGE HERE - Use snake_case for ALL keys ***
       .accounts({
+        // Use camelCase names matching the TypeScript types
         userAuthority: wallet.publicKey,
         pool: poolPda,
         poolAuthority: poolAuthorityPda,
-        sourceMint: poolSourceMint,
-        destinationMint: poolDestinationMint,
-        userSourceTokenAccount: userSourceTokenAccount,
-        userDestinationTokenAccount: userDestinationTokenAccount,
-        tokenAVault: poolAccount.tokenAVault,
-        tokenBVault: poolAccount.tokenBVault,
+
+        sourceMint: poolSourceMint,          // Mint of token being sent IN
+        destinationMint: poolDestinationMint, // Mint of token being sent OUT
+
+        userSourceTokenAccount: userSourceTokenAccount, // User's ATA for source token
+        userDestinationTokenAccount: userDestinationTokenAccount, // User's ATA for dest token
+
+        tokenAVault: poolAccount.tokenAVault, // The ACTUAL vault A address from pool state
+        tokenBVault: poolAccount.tokenBVault, // The ACTUAL vault B address from pool state
+
         tokenProgram: TOKEN_PROGRAM_ID,
       } as any)
+      // *** END CHANGE HERE ***
       .instruction();
 
     transaction.add(swapIx);
@@ -2253,198 +2390,1013 @@ export async function executePoolSwap(
   }
 }
 
+// export async function createLiquidityPool(
+//   connection: Connection,
+//   wallet: any,
+//   tokenASymbol: string,
+//   tokenBSymbol: string,
+//   initialAmountA: number,
+//   initialAmountB: number,
+//   network: "localnet" | "devnet" | "mainnet" = "localnet",
+// ): Promise<{
+//   success: boolean;
+//   message: string;
+//   signature?: string;
+//   explorerUrl?: string;
+// }> {
+//   try {
+//     if (!wallet.connected || !wallet.publicKey) {
+//       return {
+//         success: false,
+//         message: "Wallet not connected",
+//       };
+//     }
+
+//     const program = getProgram(connection, wallet)
+//     const authority = wallet.publicKey;
+
+//     const tokenAIsSol = tokenASymbol.toUpperCase() === "SOL";
+//     const tokenBIsSol = tokenBSymbol.toUpperCase() === "SOL";
+
+//     if (tokenAIsSol !== tokenBIsSol) {
+//       const solAmount = tokenAIsSol ? initialAmountA : initialAmountB;
+//       const splAmount = tokenAIsSol ? initialAmountB : initialAmountA;
+//       const splSymbol = tokenAIsSol ? tokenBSymbol : tokenASymbol;
+
+//       if (solAmount <= 0) {
+//         return {
+//           success: false,
+//           message: `Invalid initial amount for SOL (${solAmount}). Amount must be positive`,
+//         }
+//       }
+
+//       const userValueRatio = splAmount / solAmount;
+//       const targetValueRatio = 200;
+//       const allowedDeviation = 0.2;
+
+//       console.log(`Create Pool Value Check: User Ratio (${splSymbol}/SOL) = ${userValueRatio}, Target = ${targetValueRatio}`);
+
+//       if (Math.abs(userValueRatio - targetValueRatio) / targetValueRatio > allowedDeviation) {
+//         const suggestedSpl = (solAmount * targetValueRatio).toFixed(2);
+//         const suggestedSol = (splAmount / targetValueRatio).toFixed(4);
+
+//         return {
+//           success: false,
+//           message: `❌ Initial liquidity value ratio is unbalanced. For this test environment, please provide amounts closer to **1 SOL ≈ 200 ${splSymbol}**. \n\nSuggestions:\n- For ${solAmount} SOL, use ~${suggestedSpl} ${splSymbol}.\n- For ${splAmount} ${splSymbol}, use ~${suggestedSol} SOL.`
+
+//         }
+//       }
+//     }
+
+//     let tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+//     let tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
+
+//     if (!tokenAInfo || !tokenBInfo) {
+//       return {
+//         success: false,
+//         message: "Failed to find token information"
+//       };
+
+//     }
+//     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112")
+
+//     // if (tokenAInfo && tokenAInfo.symbol === 'SOL') {
+//     //   tokenAInfo = {
+//     //     ...tokenAInfo,
+//     //     mint: wrappedSolMint
+//     //   }
+//     // }
+
+//     // if (tokenBInfo && tokenBInfo.symbol === "SOL") {
+//     //   tokenBInfo = {
+//     //     ...tokenBInfo,
+//     //     mint: wrappedSolMint
+//     //   };
+//     // }
+
+//     // const sortByMint = tokenAInfo.mint.toString() < tokenBInfo.mint.toString();
+
+//     // const [firstToken, secondToken] = sortByMint ? [tokenAInfo, tokenBInfo] : [tokenBInfo, tokenAInfo];
+
+//     // const [firstToken, secondToken] = [tokenAInfo, tokenBInfo].sort((a, b) => a.mint.toBuffer().compare(b.mint.toBuffer()));
+//     let tokenAMint = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+//     let tokenBMint = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
+
+//     // const [firstLiquidty, secondLiquidity] = sortByMint ? [initialLiquidityA, initialLiquidityB] : [initialLiquidityB, initialLiquidityA];
+
+//     // const firstLiquidty = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityA : initialLiquidityB;
+
+//     // const secondLiquidity = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityB : initialLiquidityA;
+
+//     let firstAmount = initialAmountA;
+//     let secondAmount = initialAmountB;
+
+//     if (tokenAMint.toBuffer().compare(tokenBMint.toBuffer()) > 0) {
+//       [tokenAMint, tokenBMint] = [tokenBMint, tokenAMint];
+//       [firstAmount, secondAmount] = [initialAmountB, initialAmountA];
+//       console.log("Swapped mint order for PDA derivation")
+//     }
+
+//     const amountABaseUnits = new BN(firstAmount * Math.pow(10, tokenAIsSol ? 9 : tokenAInfo.decimals));
+//     const amountBBaseUnits = new BN(secondAmount * Math.pow(10, tokenBIsSol ? 9 : tokenBInfo.decimals));
+
+
+
+//     const { poolPda, vaultAPda, vaultBPda, lpMintPda, poolAuthorityPda } = await getPoolPDAs(program.programId, tokenAMint, tokenBMint);
+
+
+
+//     // console.log(`Creating pool for ${tokenASymbol}/${tokenBSymbol}`);
+//     // console.log(` Pool PDA: ${poolPda.toString()}`);
+//     // console.log(`Pool Authority PDA: ${poolAuthorityPda.toString()}`);
+
+//     console.log("Creating pool with PDAs:", { poolPda: poolPda.toBase58(), vaultAPda: vaultAPda.toBase58(), vaultBPda: vaultBPda.toBase58(), lpMintPda: lpMintPda.toBase58() });
+
+//     const solAmountToWrap = tokenAIsSol ? firstAmount : (tokenBIsSol ? secondAmount : 0);
+
+
+//     const userTokenAAccount = await getAssociatedTokenAddress(firstToken.mint, wallet.publicKey);
+//     const userTokenBAccount = await getAssociatedTokenAddress(secondToken.mint, wallet.publicKey);
+
+
+
+//     const tokenAVault = await getAssociatedTokenAddress(
+//       firstToken.mint,
+//       poolAuthorityPda,
+//       true
+//     );
+//     const tokenBVault = await getAssociatedTokenAddress(
+//       secondToken.mint,
+//       poolAuthorityPda,
+//       true
+//     );
+
+//     const tx = await program.methods
+//       .initializePool()
+//       .accounts({
+//         tokenAMint: firstToken.mint,
+//         tokenBMint: secondToken.mint,
+//         pool: poolPda,
+//         poolAuthority: poolAuthorityPda,
+//         tokenAVault: tokenAVault,
+//         tokenBVault: tokenBVault,
+//         initializer: wallet.publicKey,
+//         tokenProgram: TOKEN_PROGRAM_ID,
+//         associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
+//         systemProgram: SystemProgram.programId,
+//         rent: web3.SYSVAR_RENT_PUBKEY,
+//       } as any)
+//       .rpc();
+
+//     console.log(`Checking balances before adding liquidity...`)
+//     const firstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
+//     const secondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
+
+//     console.log(`User has ${firstTokenBalance} ${firstToken.symbol} and ${secondTokenBalance} ${secondToken.symbol}`)
+
+//     if (firstTokenBalance < firstLiquidty) {
+//       return {
+//         success: false,
+//         message: `Pool created, but couldn't add liquidity: Not enough ${firstToken.symbol}. You have ${firstTokenBalance}, but need ${firstLiquidty}`,
+//         signature: tx,
+//         explorerUrl: network === "mainnet"
+//           ? `https://explorer.solana.com/tx/${tx}`
+//           : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+//       };
+//     }
+
+//     if (secondTokenBalance < secondLiquidity) {
+//       return {
+//         success: false,
+//         message: `Pool created, but couldn't add liquidity: Not enough ${secondToken.symbol}. You have ${secondTokenBalance}, but need ${secondLiquidity}`,
+//         signature: tx,
+//         explorerUrl: network === "mainnet"
+//           ? `https://explorer.solana.com/tx/${tx}`
+//           : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+//       };
+//     }
+
+//     try {
+//       await connection.confirmTransaction(tx);
+
+
+
+//       const addLiquidityTx = await program.methods
+//         .addLiquidity(
+//           new BN(firstLiquidty * Math.pow(10, firstToken.decimals)),
+//           new BN(secondLiquidity * Math.pow(10, secondToken.decimals)),
+//         )
+//         .accounts({
+//           pool: poolPda,
+//           poolAuthority: poolAuthorityPda,
+//           tokenAMint: firstToken.mint,
+//           tokenBMint: secondToken.mint,
+//           userTokenAAccount,
+//           userTokenBAccount,
+//           tokenAVault: tokenAVault,
+//           tokenBVault: tokenBVault,
+//           userAuthority: wallet.publicKey,
+//           tokenProgram: TOKEN_PROGRAM_ID
+//         } as any)
+//         .rpc();
+
+//       console.log("Added initial liquidity:", addLiquidityTx)
+//     } catch (err: any) {
+//       console.warn("Pool created but adding liquidity failed:", err);
+//     }
+
+
+//     const explorerUrl = network === "mainnet"
+//       ? `https://explorer.solana.com/tx/${tx}`
+//       : `https://explorer.solana.com/tx/${tx}?cluster=devnet`;
+
+//     return {
+//       success: true,
+//       message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}`,
+//       signature: tx,
+//       explorerUrl,
+//     }
+//   } catch (err: any) {
+//     console.error("Failed to create liquidty pool:", err);
+//     return {
+//       success: false,
+//       message: `Failed to create liquidity pool: ${err.message}`,
+//     }
+//   }
+// }
+// export async function createLiquidityPool(
+//   connection: Connection,
+//   wallet: any, // AnchorWallet or similar
+//   tokenASymbol: string,
+//   tokenBSymbol: string,
+//   initialAmountA: number,
+//   initialAmountB: number,
+//   network: "localnet" | "devnet" | "mainnet" = "localnet"
+// ): Promise<{ success: boolean; message: string; signature?: string; explorerUrl?: string; error?: any }> {
+//   try {
+//     const program = getProgram(connection, wallet);
+//     const authority = wallet.publicKey;
+
+//     // --- BEGIN VALUE RATIO CHECK FOR SOL POOLS ---
+//     const tokenAIsSol = tokenASymbol.toUpperCase() === 'SOL';
+//     const tokenBIsSol = tokenBSymbol.toUpperCase() === 'SOL';
+
+//     // Check if exactly one of the tokens is SOL
+//     if (tokenAIsSol !== tokenBIsSol) {
+//       const solAmount = tokenAIsSol ? initialAmountA : initialAmountB;
+//       const splAmount = tokenAIsSol ? initialAmountB : initialAmountA;
+//       const splSymbol = tokenAIsSol ? tokenBSymbol : tokenASymbol;
+
+//       if (solAmount <= 0) {
+//         return { success: false, message: `Invalid initial amount for SOL (${solAmount}). Amount must be positive.`, error: "InvalidAmount" };
+//       }
+
+//       const userValueRatio = splAmount / solAmount;
+//       const targetValueRatio = 200; // Your target: 1 SOL = 200 SPL
+//       const allowedDeviation = 0.2; // Allow 20% deviation
+
+//       console.log(`Create Pool Value Check: User Ratio (${splSymbol}/SOL) = ${userValueRatio}, Target = ${targetValueRatio}`);
+
+//       if (Math.abs(userValueRatio - targetValueRatio) / targetValueRatio > allowedDeviation) {
+//         const suggestedSpl = (solAmount * targetValueRatio).toFixed(2);
+//         const suggestedSol = (splAmount / targetValueRatio).toFixed(4);
+
+//         return {
+//           success: false,
+//           message: `❌ Initial liquidity value ratio is unbalanced. For this test environment, please provide amounts closer to **1 SOL ≈ 200 ${splSymbol}**. \n\nSuggestions:\n- For ${solAmount} SOL, use ~${suggestedSpl} ${splSymbol}.\n- For ${splAmount} ${splSymbol}, use ~${suggestedSol} SOL.`,
+//           error: "InitialValueRatioImbalance"
+//         };
+//       }
+//     }
+//     else if (!tokenAIsSol && !tokenBIsSol) {
+//       const amountA = initialAmountA;
+//       const amountB = initialAmountB;
+
+//       if (amountA <= 0 || amountB <= 0) {
+//         return { success: false, message: `Invalid initial amounts (${amountA} ${tokenASymbol}, ${amountB} ${tokenBSymbol}). Amounts must be positive.`, error: "InvalidAmount" };
+//       }
+
+//       const userRatio = amountA / amountB;
+//       const targetRatio = 1; // Target 1:1 ratio for SPL-to-SPL
+//       const allowedDeviation = 0.1; // Allow 10% deviation for simplicity
+
+//       console.log(`Create Pool Ratio Check (SPL-SPL Pool): User Ratio (${tokenASymbol}/${tokenBSymbol}) = ${userRatio}, Target = ${targetRatio}`);
+
+//       if (Math.abs(userRatio - targetRatio) / targetRatio > allowedDeviation) {
+//         return {
+//           success: false,
+//           message: `❌ Initial liquidity ratio is unbalanced for SPL-to-SPL pool. Please provide amounts closer to a **1:1 ratio** (e.g., 100 ${tokenASymbol} and 100 ${tokenBSymbol}).`,
+//           error: "InitialSplRatioImbalance"
+//         };
+//       }
+//     }
+//     // --- END VALUE RATIO CHECK ---
+
+//     // Get token mints (handle SOL wrapping if needed)
+//     const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+//     const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
+
+//     if (!tokenAInfo || !tokenBInfo) {
+//       throw new Error("Could not find or create token info for pool creation.");
+//     }
+
+//     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+//     let tokenAMint = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+//     let tokenBMint = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
+
+//     // Ensure mint order (important for PDA derivation)
+
+
+
+//     // if (tokenAMint.toBuffer().compare(tokenBMint.toBuffer()) > 0) {
+//     //   [tokenAMint, tokenBMint] = [tokenBMint, tokenAMint];
+//     //   [firstAmount, secondAmount] = [initialAmountB, initialAmountA];
+//     //   console.log("Swapped mint order for PDA derivation.");
+//     // }
+
+//     // Convert amounts to base units (lamports)
+//     // Ensure decimals are correctly fetched after potential swap
+//     const firstTokenDecimals = tokenAMint.equals(tokenAInfo.mint) ? tokenAInfo.decimals : (tokenAMint.equals(wrappedSolMint) ? 9 : tokenBInfo.decimals);
+//     const secondTokenDecimals = tokenBMint.equals(tokenBInfo.mint) ? tokenBInfo.decimals : (tokenBMint.equals(wrappedSolMint) ? 9 : tokenAInfo.decimals);
+
+//     // const amountABaseUnits = new BN(firstAmount * Math.pow(10, firstTokenDecimals));
+//     // const amountBBaseUnits = new BN(secondAmount * Math.pow(10, secondTokenDecimals));
+
+
+//     // Derive PDAs - Now includes vault and lpMint PDAs
+//     const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+//       program.programId,
+//       tokenAMint, // Pass unsorted mint A
+//       tokenBMint  // Pass unsorted mint B
+//     );
+//     console.log("Creating pool with PDAs:", { poolPda: poolPda.toBase58(), poolAuthorityPda: poolAuthorityPda.toBase58() });
+
+
+//     const tokenAVaultATA = await getAssociatedTokenAddress(
+//       tokenAMint, // Use unsorted mint A
+//       poolAuthorityPda, // Authority is the derived PDA
+//       true // Allow off-curve addresses
+//     );
+//     const tokenBVaultATA = await getAssociatedTokenAddress(
+//       tokenBMint, // Use unsorted mint B
+//       poolAuthorityPda, // Authority is the derived PDA
+//       true // Allow off-curve addresses
+//     );
+//     // Check if SOL needs wrapping
+//     // let wrapSolInstruction: TransactionInstruction | null = null; // Type is now recognized
+//     // let cleanupInstruction: TransactionInstruction | null = null; // Type is now recognized
+//     let userSourceTokenAccountA = await getAssociatedTokenAddress(tokenAMint, authority);
+//     let userSourceTokenAccountB = await getAssociatedTokenAddress(tokenBMint, authority);
+//     // Determine which amount corresponds to SOL after potential mint swap
+//     const solAmountToWrap = tokenAMint.equals(wrappedSolMint) ? initialAmountA : (tokenBMint.equals(wrappedSolMint) ? initialAmountB : 0);
+
+//     if (solAmountToWrap > 0) {
+//       console.log(`Wrapping ${solAmountToWrap} SOL for initial liquidity...`);
+//       const lamportsToWrap = new BN(solAmountToWrap * LAMPORTS_PER_SOL);
+
+//       // Create temporary ATA for wrapped SOL
+//       const associatedTokenAccount = await getAssociatedTokenAddress(wrappedSolMint, authority);
+
+//       // Check if ATA exists, create if not
+//       const ataInfo = await connection.getAccountInfo(associatedTokenAccount);
+//       const instructions: TransactionInstruction[] = []; // Type is now recognized
+
+//       if (!ataInfo) {
+//         console.log("Creating ATA for wSOL...");
+//         instructions.push(
+//           createAssociatedTokenAccountInstruction(
+//             authority, // payer
+//             associatedTokenAccount, // ata
+//             authority, // owner
+//             wrappedSolMint // mint
+//           )
+//         );
+//       }
+
+//       // Transfer SOL and sync native
+//       instructions.push(
+//         SystemProgram.transfer({
+//           fromPubkey: authority,
+//           toPubkey: associatedTokenAccount,
+//           lamports: lamportsToWrap.toNumber(),
+//         }),
+//         createSyncNativeInstruction(associatedTokenAccount)
+//       );
+
+//       // Create a transaction for wrapping
+//       const wrapTx = new Transaction().add(...instructions);
+//       try {
+//         const wrapSig = await wallet.sendTransaction(wrapTx, connection);
+//         await connection.confirmTransaction(wrapSig, 'confirmed');
+//         console.log("SOL wrapped successfully, signature:", wrapSig);
+//       } catch (wrapError) {
+//         console.error("Failed to wrap SOL:", wrapError);
+//         return { success: false, message: `Failed to wrap SOL for liquidity: ${wrapError instanceof Error ? wrapError.message : String(wrapError)}`, error: wrapError };
+//       }
+
+
+//       // Update the source account for the main transaction
+//       if (tokenAMint.equals(wrappedSolMint)) userSourceTokenAccountA = associatedTokenAccount;
+//       else if (tokenBMint.equals(wrappedSolMint)) userSourceTokenAccountB = associatedTokenAccount;
+
+//       // Prepare instruction to close the temporary wSOL account after pool creation
+//       // Note: This might be complex if the user already had a wSOL account.
+//       // For simplicity in test env, we might skip auto-closing or require manual cleanup.
+//       // cleanupInstruction = createCloseAccountInstruction(associatedTokenAccount, authority, authority);
+//     }
+
+
+//     // Build the main transaction
+//     const tx = new Transaction();
+
+//     // Add the InitializePool instruction
+//     tx.add(
+//       program.instruction.initializePool({
+//         accounts: {
+//           // pool: poolPda,
+//           // poolAuthority: poolAuthorityPda, // Use derived pool authority PDA
+//           // tokenAMint: tokenAMint,
+//           // tokenBMint: tokenBMint,
+//           // tokenAVault: vaultAPda, // Use derived vault PDA
+//           // tokenBVault: vaultBPda, // Use derived vault PDA
+//           // lpTokenMint: lpMintPda, // Use derived LP mint PDA
+//           // userTokenAAccount: userSourceTokenAccountA,
+//           // userTokenBAccount: userSourceTokenAccountB,
+//           // userWallet: authority,
+//           // tokenProgram: TOKEN_PROGRAM_ID,
+//           // associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
+//           // systemProgram: SystemProgram.programId,
+//           // rent: web3.SYSVAR_RENT_PUBKEY, // Use imported SYSVAR_RENT_PUBKEY
+//           tokenAMint: tokenAMint, // Mint A (ordered)
+//           tokenBMint: tokenBMint, // Mint B (ordered)
+//           pool: poolPda,          // Pool state account PDA
+//           poolAuthority: poolAuthorityPda, // Pool authority PDA
+//           tokenAVault: tokenAVaultATA, // Vault A PDA (derived using ordered mints)
+//           tokenBVault: tokenBVaultATA, // Vault B PDA (derived using ordered mints)
+//           initializer: authority, // Changed from userWallet to initializer
+//           tokenProgram: TOKEN_PROGRAM_ID,
+//           associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
+//           systemProgram: SystemProgram.programId,
+//           rent: web3.SYSVAR_RENT_PUBKEY,
+//         },
+//       } as any) // Removed 'as any' as types should align now
+//     );
+
+//     // Add cleanup instruction if needed (use with caution)
+//     // if (cleanupInstruction) {
+//     //    tx.add(cleanupInstruction);
+//     // }
+
+//     // Send and confirm transaction
+//     const signature = await wallet.sendTransaction(tx, connection);
+//     console.log("Create pool transaction sent:", signature);
+
+//     const confirmation = await connection.confirmTransaction(signature, "confirmed");
+//     if (confirmation.value.err) {
+//       // Attempt to get logs for better error diagnosis
+//       const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+//       console.error("Transaction confirmation error details:", confirmation.value.err);
+//       console.error("Transaction logs:", txDetails?.meta?.logMessages);
+//       throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+//     }
+
+//     console.log("Pool created successfully!");
+//     const explorerUrl = network === "mainnet" ?
+//       `https://explorer.solana.com/tx/${signature}`
+//       : `https://explorer.solana.com/tx/${signature}?cluster=${network}`;
+
+//     return {
+//       success: true,
+//       message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}.`,
+//       signature,
+//       explorerUrl,
+//     };
+
+//   } catch (error: any) {
+//     console.error("Failed to create liquidity pool:", error);
+//     // Try to provide more specific error messages
+//     let message = `Failed to create liquidity pool: ${error.message}`;
+//     // Check if error has logs property (common with Anchor errors after simulation/confirmation failure)
+//     const errorLogs = error?.logs as string[] | undefined;
+//     if (errorLogs) {
+//       console.error("Error Logs:", errorLogs); // Log the errors
+//       if (errorLogs.some((log: string) => log.includes("already in use"))) {
+//         message = `❌ Pool for ${tokenASymbol}/${tokenBSymbol} already exists. Use 'add liquidity' instead.`;
+//       } else if (errorLogs.some((log: string) => log.includes("insufficient lamports"))) {
+//         message = `❌ Failed to create pool: Insufficient SOL balance for rent/fees.`;
+//       }
+//       // Add more specific checks based on program logs if needed
+//     } else if (error.message?.includes("Attempt to debit an account but found no record of a prior credit")) {
+//       message = `❌ Failed to create pool: Insufficient balance for one of the tokens or SOL for fees/rent.`;
+//     } else if (error.message?.includes("Transaction simulation failed")) {
+//       // Extract logs if available within the simulation error message itself
+//       const logsMatch = error.message.match(/Logs:\s*(\[[\s\S]*\])/);
+//       const logsString = logsMatch ? logsMatch[1] : "[]";
+//       try {
+//         const logsArray = JSON.parse(logsString.replace(/\\"/g, '"')); // Handle escaped quotes
+//         console.error("Simulation Logs:", logsArray);
+//         if (logsArray.some((log: string) => log.includes("already in use"))) {
+//           message = `❌ Pool for ${tokenASymbol}/${tokenBSymbol} already exists. Use 'add liquidity' instead.`;
+//         } else if (logsArray.some((log: string) => log.includes("insufficient lamports"))) {
+//           message = `❌ Failed to create pool: Insufficient SOL balance for rent/fees.`;
+//         }
+//       } catch (parseError) {
+//         console.error("Failed to parse simulation logs:", parseError);
+//       }
+//     }
+
+
+//     return { success: false, message, error };
+//   }
+// }
 export async function createLiquidityPool(
   connection: Connection,
-  wallet: WalletContextState,
+  wallet: WalletContextState, // Use correct type
   tokenASymbol: string,
   tokenBSymbol: string,
-  initialLiquidityA: number = 2,
-  initialLiquidityB: number = 2,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
-): Promise<{
-  success: boolean;
-  message: string;
-  signature?: string;
-  explorerUrl?: string;
-}> {
+  initialAmountA: number, // These are NOT used by initializePool, only for ratio check
+  initialAmountB: number, // These are NOT used by initializePool, only for ratio check
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{ success: boolean; message: string; signature?: string; explorerUrl?: string; error?: any }> {
   try {
-    if (!wallet.connected || !wallet.publicKey) {
-      return {
-        success: false,
-        message: "Wallet not connected",
-      };
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      return { success: false, message: "Wallet not connected or doesn't support signing." };
     }
+    const program = getProgram(connection, wallet);
+    const authority = wallet.publicKey;
 
-    const program = getProgram(connection, wallet)
-
-    let tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
-    let tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
-
-    if (!tokenAInfo || !tokenBInfo) {
-      return {
-        success: false,
-        message: "Failed to find token information"
-      };
-
-    }
-    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112")
-
-    if (tokenAInfo && tokenAInfo.symbol === 'SOL') {
-      tokenAInfo = {
-        ...tokenAInfo,
-        mint: wrappedSolMint
+    // --- Ratio Check (Keep this as it's good validation) ---
+    const tokenAIsSol = tokenASymbol.toUpperCase() === 'SOL';
+    const tokenBIsSol = tokenBSymbol.toUpperCase() === 'SOL';
+    if (tokenAIsSol !== tokenBIsSol) {
+      // ... (keep your existing ratio check logic) ...
+      const solAmount = tokenAIsSol ? initialAmountA : initialAmountB;
+      const splAmount = tokenAIsSol ? initialAmountB : initialAmountA;
+      const splSymbol = tokenAIsSol ? tokenBSymbol : tokenASymbol;
+      if (solAmount <= 0) return { success: false, message: `Invalid initial amount for SOL (${solAmount}).`, error: "InvalidAmount" };
+      const userValueRatio = splAmount / solAmount;
+      const targetValueRatio = 200;
+      const allowedDeviation = 0.2;
+      if (Math.abs(userValueRatio - targetValueRatio) / targetValueRatio > allowedDeviation) {
+        const suggestedSpl = (solAmount * targetValueRatio).toFixed(2);
+        const suggestedSol = (splAmount / targetValueRatio).toFixed(4);
+        return { success: false, message: `❌ Initial liquidity value ratio is unbalanced. Target: **1 SOL ≈ 200 ${splSymbol}**. \nSuggestions:\n- For ${solAmount} SOL, use ~${suggestedSpl} ${splSymbol}.\n- For ${splAmount} ${splSymbol}, use ~${suggestedSol} SOL.`, error: "InitialValueRatioImbalance" };
+      }
+    } else if (!tokenAIsSol && !tokenBIsSol) {
+      // ... (keep your existing SPL-SPL ratio check logic) ...
+      const amountA = initialAmountA;
+      const amountB = initialAmountB;
+      if (amountA <= 0 || amountB <= 0) return { success: false, message: `Invalid initial amounts. Amounts must be positive.`, error: "InvalidAmount" };
+      const userRatio = amountA / amountB;
+      const targetRatio = 1;
+      const allowedDeviation = 0.1;
+      if (Math.abs(userRatio - targetRatio) / targetRatio > allowedDeviation) {
+        return { success: false, message: `❌ Initial liquidity ratio is unbalanced for SPL-to-SPL pool. Please use a **1:1 ratio**.`, error: "InitialSplRatioImbalance" };
       }
     }
+    // --- End Ratio Check ---
 
-    if (tokenBInfo && tokenBInfo.symbol === "SOL") {
-      tokenBInfo = {
-        ...tokenBInfo,
-        mint: wrappedSolMint
-      };
-    }
+    // Get token info
+    const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
+    if (!tokenAInfo || !tokenBInfo) throw new Error("Could not find token info.");
 
-    // const sortByMint = tokenAInfo.mint.toString() < tokenBInfo.mint.toString();
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    let mintA = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+    let mintB = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
 
-    // const [firstToken, secondToken] = sortByMint ? [tokenAInfo, tokenBInfo] : [tokenBInfo, tokenAInfo];
+    // **CRITICAL: Sort Mints**
+    const [sortedMintA, sortedMintB] = [mintA, mintB].sort((a, b) =>
+      a.toBuffer().compare(b.toBuffer())
+    );
+    console.log(` Sorted Mint A: ${sortedMintA.toBase58()}`);
+    console.log(` Sorted Mint B: ${sortedMintB.toBase58()}`);
 
-    const [firstToken, secondToken] = [tokenAInfo, tokenBInfo].sort((a, b) => a.mint.toBuffer().compare(b.mint.toBuffer()));
-
-    // const [firstLiquidty, secondLiquidity] = sortByMint ? [initialLiquidityA, initialLiquidityB] : [initialLiquidityB, initialLiquidityA];
-
-    const firstLiquidty = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityA : initialLiquidityB;
-
-    const secondLiquidity = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? initialLiquidityB : initialLiquidityA;
-
-    const { poolPda, poolAuthorityPda, poolBump } = await getPoolPDAs(
+    // Derive PDAs using SORTED mints
+    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
       program.programId,
-      firstToken.mint,
-      secondToken.mint
+      sortedMintA, // Pass sorted
+      sortedMintB  // Pass sorted
     );
+    console.log(` Derived Pool PDA: ${poolPda.toBase58()}`);
+    console.log(` Derived Pool Authority PDA: ${poolAuthorityPda.toBase58()}`);
 
-
-    console.log(`Creating pool for ${tokenASymbol}/${tokenBSymbol}`);
-    console.log(` Pool PDA: ${poolPda.toString()}`);
-    console.log(`Pool Authority PDA: ${poolAuthorityPda.toString()}`);
-
-    const userTokenAAccount = await getAssociatedTokenAddress(firstToken.mint, wallet.publicKey);
-    const userTokenBAccount = await getAssociatedTokenAddress(secondToken.mint, wallet.publicKey);
-
-
-
-    const tokenAVault = await getAssociatedTokenAddress(
-      firstToken.mint,
-      poolAuthorityPda,
-      true
+    // Derive Vault ATAs using SORTED mints and the CORRECT authority
+    const tokenAVaultATA = await getAssociatedTokenAddress(
+      sortedMintA,        // Use sorted mint A
+      poolAuthorityPda,   // Use correctly derived authority
+      true                // Allow off-curve
     );
-    const tokenBVault = await getAssociatedTokenAddress(
-      secondToken.mint,
-      poolAuthorityPda,
-      true
+    const tokenBVaultATA = await getAssociatedTokenAddress(
+      sortedMintB,        // Use sorted mint B
+      poolAuthorityPda,   // Use correctly derived authority
+      true                // Allow off-curve
     );
+    console.log(` Derived Vault A ATA: ${tokenAVaultATA.toBase58()}`);
+    console.log(` Derived Vault B ATA: ${tokenBVaultATA.toBase58()}`);
 
-    const tx = await program.methods
-      .initializePool()
-      .accounts({
-        tokenAMint: firstToken.mint,
-        tokenBMint: secondToken.mint,
-        pool: poolPda,
-        poolAuthority: poolAuthorityPda,
-        tokenAVault: tokenAVault,
-        tokenBVault: tokenBVault,
-        initializer: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: web3.SYSVAR_RENT_PUBKEY,
-      } as any)
-      .rpc();
+    // Build the InitializePool transaction
+    const tx = new Transaction();
 
-    console.log(`Checking balances before adding liquidity...`)
-    const firstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
-    const secondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
-
-    console.log(`User has ${firstTokenBalance} ${firstToken.symbol} and ${secondTokenBalance} ${secondToken.symbol}`)
-
-    if (firstTokenBalance < firstLiquidty) {
-      return {
-        success: false,
-        message: `Pool created, but couldn't add liquidity: Not enough ${firstToken.symbol}. You have ${firstTokenBalance}, but need ${firstLiquidty}`,
-        signature: tx,
-        explorerUrl: network === "mainnet"
-          ? `https://explorer.solana.com/tx/${tx}`
-          : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
-      };
-    }
-
-    if (secondTokenBalance < secondLiquidity) {
-      return {
-        success: false,
-        message: `Pool created, but couldn't add liquidity: Not enough ${secondToken.symbol}. You have ${secondTokenBalance}, but need ${secondLiquidity}`,
-        signature: tx,
-        explorerUrl: network === "mainnet"
-          ? `https://explorer.solana.com/tx/${tx}`
-          : `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
-      };
-    }
-
-    try {
-      await connection.confirmTransaction(tx);
-
-
-
-      const addLiquidityTx = await program.methods
-        .addLiquidity(
-          new BN(firstLiquidty * Math.pow(10, firstToken.decimals)),
-          new BN(secondLiquidity * Math.pow(10, secondToken.decimals)),
-        )
+    // Use program.methods for type safety and clarity
+    tx.add(
+      await program.methods
+        .initializePool() // No arguments needed for initializePool itself
         .accounts({
+          tokenAMint: sortedMintA, // Pass SORTED mint A
+          tokenBMint: sortedMintB, // Pass SORTED mint B
           pool: poolPda,
           poolAuthority: poolAuthorityPda,
-          tokenAMint: firstToken.mint,
-          tokenBMint: secondToken.mint,
-          userTokenAAccount,
-          userTokenBAccount,
-          tokenAVault: tokenAVault,
-          tokenBVault: tokenBVault,
-          userAuthority: wallet.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID
+          tokenAVault: tokenAVaultATA, // Pass CORRECTLY derived vault A
+          tokenBVault: tokenBVaultATA, // Pass CORRECTLY derived vault B
+          initializer: authority,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: web3.SYSVAR_RENT_PUBKEY,
         } as any)
-        .rpc();
+        .instruction() // Get the instruction object
+    );
 
-      console.log("Added initial liquidity:", addLiquidityTx)
-    } catch (err: any) {
-      console.warn("Pool created but adding liquidity failed:", err);
+    // Send and confirm transaction
+    console.log(" Sending create pool transaction...");
+    const signature = await wallet.sendTransaction(tx, connection);
+    console.log(" Create pool transaction sent:", signature);
+
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    if (confirmation.value.err) {
+      const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+      console.error("Create Pool Transaction confirmation failed:", confirmation.value.err);
+      console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
+      throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
     }
 
-
-    const explorerUrl = network === "mainnet"
-      ? `https://explorer.solana.com/tx/${tx}`
-      : `https://explorer.solana.com/tx/${tx}?cluster=devnet`;
+    console.log("✅ Pool created successfully!");
+    const explorerUrl = getExplorerLink(signature, network);
 
     return {
       success: true,
-      message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}`,
-      signature: tx,
+      message: `Successfully created liquidity pool for ${tokenASymbol}/${tokenBSymbol}. You can now add initial liquidity.`,
+      signature,
       explorerUrl,
+    };
+
+  } catch (error: any) {
+    console.error("💥 Failed to create liquidity pool:", error);
+    let message = `Failed to create liquidity pool: ${error.message || error.toString()}`;
+    const errorLogs = error?.logs as string[] | undefined;
+    if (errorLogs) {
+      console.error("Error Logs:", errorLogs);
+      if (errorLogs.some((log: string) => log.includes("already in use") || log.includes("custom program error: 0x0"))) { // 0x0 is often account already in use
+        message = `❌ Pool for ${tokenASymbol}/${tokenBSymbol} already exists. Use 'add liquidity' instead.`;
+      } else if (errorLogs.some((log: string) => log.includes("insufficient lamports"))) {
+        message = `❌ Failed to create pool: Insufficient SOL balance for rent/fees.`;
+      }
+    } else if (error.message?.includes("Transaction simulation failed")) {
+      const logsMatch = error.message.match(/Logs:\s*(\[[\s\S]*\])/);
+      const logsString = logsMatch ? logsMatch[1] : "[]";
+      try {
+        const logsArray = JSON.parse(logsString.replace(/\\"/g, '"'));
+        console.error("Simulation Logs:", logsArray);
+        if (logsArray.some((log: string) => log.includes("already in use") || log.includes("custom program error: 0x0"))) {
+          message = `❌ Pool for ${tokenASymbol}/${tokenBSymbol} already exists. Use 'add liquidity' instead.`;
+        } else if (logsArray.some((log: string) => log.includes("insufficient lamports"))) {
+          message = `❌ Failed to create pool: Insufficient SOL balance for rent/fees.`;
+        }
+      } catch (parseError) { console.error("Failed to parse simulation logs:", parseError); }
     }
-  } catch (err: any) {
-    console.error("Failed to create liquidty pool:", err);
-    return {
-      success: false,
-      message: `Failed to create liquidity pool: ${err.message}`,
-    }
+    return { success: false, message, error };
   }
 }
+// export async function addLiquidityToPool(
+//   connection: Connection,
+//   wallet: any, // Use correct type if available (e.g., AnchorWallet)
+//   tokenASymbol: string,
+//   tokenBSymbol: string,
+//   liquidityAmountA: number,
+//   liquidityAmountB: number,
+//   network: "localnet" | "devnet" | "mainnet" = "localnet"
+// ): Promise<{
+//   success: boolean;
+//   message: string;
+//   signature?: string;
+//   explorerUrl?: string;
+// }> {
+//   try {
+//     const program = getProgram(connection, wallet);
+//     const authority = wallet.publicKey;
+
+//     // 1. Get Token Info (Handle SOL wrapping)
+//     const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+//     const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
+
+//     if (!tokenAInfo || !tokenBInfo) {
+//       return { success: false, message: "Failed to find token information for liquidity addition." };
+//     }
+
+//     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+//     const tokenAIsSol = tokenASymbol.toUpperCase() === 'SOL';
+//     const tokenBIsSol = tokenBSymbol.toUpperCase() === 'SOL';
+
+//     // Use original, unsorted mints based on input symbols
+//     let originalMintA = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+//     let originalMintB = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
+//     let decimalsA = tokenAInfo.decimals;
+//     let decimalsB = tokenBInfo.decimals;
+
+
+//     // 2. Get Pool PDAs (getPoolPDAs now handles sorting internally)
+//     const { poolPda, } = await getPoolPDAs(
+//       program.programId,
+//       originalMintA, // Pass unsorted
+//       originalMintB  // Pass unsorted
+//     );
+
+//     console.log("Fetching pool state...");
+//     let poolAccount;
+//     try {
+//       poolAccount = await program.account.liquidityPool.fetch(poolPda);
+//       console.log(` Pool State Mint A: ${poolAccount.tokenAMint.toString()}`);
+//       console.log(` Pool State Mint B: ${poolAccount.tokenBMint.toString()}`);
+//       console.log("Pool account fetched successfully.");
+//     } catch (e) {
+//       console.error("Error fetching pool account:", e);
+//       return {
+//         success: false,
+//         message: `Liquidity pool for ${tokenASymbol}/${tokenBSymbol} not found or could not be accessed.`,
+//       };
+//     }
+
+//     // 3. Derive Vault ATAs using the poolAuthorityPda and ORIGINAL (unsorted) mints
+//     // const tokenAVaultATA = await getAssociatedTokenAddress(
+//     //   originalMintA,    // Use original unsorted mint A
+//     //   poolAuthorityPda, // Authority is the PDA derived (internally using sorted mints)
+//     //   true              // Allow off-curve addresses
+//     // );
+
+//     // const [derivedPoolAuthorityPda, derivedBump] = await PublicKey.findProgramAddressSync(
+//     //   [
+//     //     Buffer.from("pool"),
+//     //     poolAccount.tokenAMint.toBuffer(), // Use sorted mint from pool state
+//     //     poolAccount.tokenBMint.toBuffer(), // Use sorted mint from pool state
+//     //   ],
+//     //   program.programId
+//     // );
+
+//     // let derivedPoolAuthorityPda: PublicKey;
+//     // try {
+//     //   derivedPoolAuthorityPda = PublicKey.createProgramAddressSync(
+//     //     [
+//     //       Buffer.from("pool"),
+//     //       poolAccount.tokenAMint.toBuffer(), // Use sorted mint from pool state
+//     //       poolAccount.tokenBMint.toBuffer(), // Use sorted mint from pool state
+//     //       Buffer.from([poolAccount.bump]),   // Use the STORED bump from pool state
+//     //     ],
+//     //     program.programId
+//     //   );
+//     //   console.log("Derived pool authority PDA using stored bump:", derivedPoolAuthorityPda.toString());
+//     // } catch (e) {
+//     //   console.error("Failed to derive pool authority PDA using stored bump:", e);
+//     //   // Fallback or re-throw might be needed depending on how critical this is
+//     //   // Let's try deriving with findProgramAddressSync as a less ideal fallback, logging the issue
+//     //   console.warn("Falling back to findProgramAddressSync for pool authority PDA derivation.");
+//     //   [derivedPoolAuthorityPda] = await PublicKey.findProgramAddressSync(
+//     //     [
+//     //       Buffer.from("pool"),
+//     //       poolAccount.tokenAMint.toBuffer(),
+//     //       poolAccount.tokenBMint.toBuffer(),
+//     //     ],
+//     //     program.programId
+//     //   );
+//     //   console.warn("Derived pool authority PDA using findProgramAddressSync (may cause issues):", derivedPoolAuthorityPda.toString());
+//     //   // It's likely the transaction will still fail if the bumps don't match, but this provides more info.
+//     //   return { success: false, message: `Failed to derive correct pool authority PDA using stored bump (${poolAccount.bump}).` };
+//     // }
+
+//     const [derivedPoolAuthorityPda, derivedBump] = await PublicKey.findProgramAddressSync(
+//       [
+//         Buffer.from("pool"),
+//         poolAccount.tokenAMint.toBuffer(), // Use sorted mint from pool state
+//         poolAccount.tokenBMint.toBuffer(), // Use sorted mint from pool state
+//       ],
+//       program.programId
+//     );
+//     console.log(`Derived pool authority PDA using findProgramAddressSync (canonical bump ${derivedBump}): ${derivedPoolAuthorityPda.toString()}`);
+
+
+
+//     // if (derivedBump !== poolAccount.bump) {
+//     //   console.warn(`Derived bump (${derivedBump}) does not match stored bump (${poolAccount.bump}) for authority PDA. This might indicate an issue.`);
+//     //   // Depending on program logic, you might want to throw an error here or proceed cautiously.
+//     //   // For now, we'll proceed using the derived PDA.
+//     // }
+//     // console.log("Derived pool authority PDA using sorted state mints:", derivedPoolAuthorityPda.toString());
+
+
+//     // console.log("Re-derived pool authority PDA using sorted mints:", poolAuthorityPda.toString());
+//     const storedVaultA = poolAccount.tokenAVault;
+//     const storedVaultB = poolAccount.tokenBVault;
+//     console.log("Vault addresses stored in pool state:");
+//     console.log(`  Stored Vault A: ${storedVaultA.toString()}`);
+//     console.log(`  Stored Vault B: ${storedVaultB.toString()}`);
+
+//     // Derive the expected vault ATAs based on the derived pool authority and sorted mints from state
+//     const derivedVaultA = await getAssociatedTokenAddress(
+//       poolAccount.tokenAMint,      // Pool's A mint (sorted)
+//       derivedPoolAuthorityPda,   // Authority PDA derived using sorted mints + canonical bump
+//       true                       // Allow off-curve (standard for ATAs derived with PDA)
+//     );
+//     const derivedVaultB = await getAssociatedTokenAddress(
+//       poolAccount.tokenBMint,      // Pool's B mint (sorted)
+//       derivedPoolAuthorityPda,   // Authority PDA derived using sorted mints + canonical bump
+//       true                       // Allow off-curve
+//     );
+//     console.log("Vault addresses derived by client:");
+//     console.log(`  Derived Vault A: ${derivedVaultA.toString()}`);
+//     console.log(`  Derived Vault B: ${derivedVaultB.toString()}`);
+
+//     // Compare derived vs stored (for debugging)
+//     if (!derivedVaultA.equals(storedVaultA)) {
+//       console.warn("MISMATCH: Derived Vault A does not match stored Vault A!");
+//     }
+//     if (!derivedVaultB.equals(storedVaultB)) {
+//       console.warn("MISMATCH: Derived Vault B does not match stored Vault B!");
+//     }
+//     const tokenAVaultToUse = derivedVaultA;
+//     const tokenBVaultToUse = derivedVaultB;
+
+//     // const tokenAVaultATA = poolAccount.tokenAVault;
+//     // const tokenBVaultATA = poolAccount.tokenBVault;
+//     // console.log("Using vault addresses from pool state:");
+//     // console.log(`Token A Vault: ${tokenAVaultATA.toString()}`);
+//     // console.log(`Token B Vault: ${tokenBVaultATA.toString()}`);
+
+
+//     // const tokenBVaultATA = await getAssociatedTokenAddress(
+//     //   originalMintB,    // Use original unsorted mint B
+//     //   poolAuthorityPda, // Authority is the PDA derived (internally using sorted mints)
+//     //   true              // Allow off-curve addresses
+//     // );
+
+//     // 4. Get User's Source ATAs (Handle SOL wrapping)
+//     let userSourceTokenAccountA = await getAssociatedTokenAddress(originalMintA, authority);
+//     let userSourceTokenAccountB = await getAssociatedTokenAddress(originalMintB, authority);
+//     const solAmountToWrap = tokenAIsSol ? liquidityAmountA : (tokenBIsSol ? liquidityAmountB : 0);
+//     let wrapInstructions: TransactionInstruction[] = [];
+
+//     let cleanupInstructions: TransactionInstruction[] = []; // Optional cleanup
+
+//     if (solAmountToWrap > 0) {
+//       console.log(`Wrapping ${solAmountToWrap} SOL for adding liquidity...`);
+//       const lamportsToWrap = new BN(solAmountToWrap * LAMPORTS_PER_SOL);
+//       const associatedTokenAccount = await getAssociatedTokenAddress(wrappedSolMint, authority);
+//       const ataInfo = await connection.getAccountInfo(associatedTokenAccount);
+
+//       if (!ataInfo) {
+//         console.log("Creating ATA for wSOL...");
+//         wrapInstructions.push(
+//           createAssociatedTokenAccountInstruction(authority, associatedTokenAccount, authority, wrappedSolMint)
+//         );
+//       }
+//       wrapInstructions.push(
+//         SystemProgram.transfer({ fromPubkey: authority, toPubkey: associatedTokenAccount, lamports: lamportsToWrap.toNumber() }),
+//         createSyncNativeInstruction(associatedTokenAccount)
+//       );
+
+//       // Update the source account for the main transaction
+//       if (tokenAIsSol) userSourceTokenAccountA = associatedTokenAccount;
+//       else if (tokenBIsSol) userSourceTokenAccountB = associatedTokenAccount;
+
+//       // Optional: Add cleanup instruction (use with caution)
+//       // cleanupInstructions.push(createCloseAccountInstruction(associatedTokenAccount, authority, authority));
+//     }
+
+//     // 5. Convert amounts to base units
+//     const amountABaseUnits = new BN(liquidityAmountA * Math.pow(10, decimalsA)); // Amount for original A (DEB)
+//     const amountBBaseUnits = new BN(liquidityAmountB * Math.pow(10, decimalsB)); // Amount for original B (SOL)
+
+//     // 5.5 Determine the correct amounts and user accounts based on the pool's stored mint order
+//     let finalAmountAForPool: BN;
+//     let finalAmountBForPool: BN;
+//     let finalUserTokenAAccountForPool: PublicKey;
+//     let finalUserTokenBAccountForPool: PublicKey;
+
+//     // Check if the original mint A matches the pool's token A mint
+//     if (originalMintA.equals(poolAccount.tokenAMint)) {
+//       // Order matches pool state: Pool A = Original A (DEB), Pool B = Original B (SOL)
+//       // THIS IS UNLIKELY based on your logs (Pool A is SOL)
+//       finalAmountAForPool = amountABaseUnits;
+//       finalAmountBForPool = amountBBaseUnits;
+//       finalUserTokenAAccountForPool = userSourceTokenAccountA; // User's DEB ATA
+//       finalUserTokenBAccountForPool = userSourceTokenAccountB; // User's wSOL ATA
+//       console.log("Pool order matches input order (A=A, B=B).");
+//     } else if (originalMintA.equals(poolAccount.tokenBMint)) {
+//       // Order is swapped vs pool state: Pool A = Original B (SOL), Pool B = Original A (DEB)
+//       // THIS IS LIKELY based on your logs
+//       finalAmountAForPool = amountBBaseUnits; // Amount for Pool's A (which is original B -> SOL amount)
+//       finalAmountBForPool = amountABaseUnits; // Amount for Pool's B (which is original A -> DEB amount)
+//       finalUserTokenAAccountForPool = userSourceTokenAccountB; // User's wSOL ATA (matches Pool's A Mint)
+//       finalUserTokenBAccountForPool = userSourceTokenAccountA; // User's DEB ATA (matches Pool's B Mint)
+//       console.log("Pool order swapped vs input order (A=B, B=A). Re-ordering accounts/amounts for instruction.");
+//     } else {
+//       // Should not happen if pool exists and mints are correct
+//       console.error("Critical mismatch: Original mints do not match pool state mints.");
+//       return { success: false, message: "Internal error: Token mint mismatch between input and pool state." };
+//     }
+//     // 6. Build Transaction
+//     const tx = new Transaction();
+
+//     // Add wrap instructions if any
+//     if (wrapInstructions.length > 0) {
+//       tx.add(...wrapInstructions);
+//     }
+
+//     // Add the AddLiquidity instruction
+//     tx.add(
+//       await program.methods
+//         // Use amounts ordered for the pool
+//         .addLiquidity(finalAmountAForPool, finalAmountBForPool)
+//         .accounts({
+//           pool: poolPda,
+//           poolAuthority: derivedPoolAuthorityPda,
+//           tokenAMint: poolAccount.tokenAMint,      // Pool's A Mint (wSOL)
+//           tokenBMint: poolAccount.tokenBMint,      // Pool's B Mint (DEB)
+//           tokenAVault: tokenAVaultToUse,           // Pool's A Vault (wSOL)
+//           tokenBVault: tokenBVaultToUse,           // Pool's B Vault (DEB)
+//           // Use user accounts ordered for the pool
+//           userTokenAAccount: finalUserTokenAAccountForPool, // User account for Pool's A Mint (wSOL ATA)
+//           userTokenBAccount: finalUserTokenBAccountForPool, // User account for Pool's B Mint (DEB ATA)
+//           userAuthority: authority,
+//           tokenProgram: TOKEN_PROGRAM_ID,
+//         } as any) // Consider defining a proper type instead of 'as any' if possible
+//         .instruction()
+//     );
+
+//     // Add cleanup instructions if any
+//     if (cleanupInstructions.length > 0) {
+//       tx.add(...cleanupInstructions);
+//     }
+
+//     // 7. Send and Confirm
+//     console.log("Sending add liquidity transaction...");
+//     const signature = await wallet.sendTransaction(tx, connection);
+//     console.log("Add liquidity transaction sent:", signature);
+
+//     const confirmation = await connection.confirmTransaction(signature, "confirmed");
+//     if (confirmation.value.err) {
+//       const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+//       console.error("Add Liquidity Transaction confirmation error details:", confirmation.value.err);
+//       console.error("Transaction logs:", txDetails?.meta?.logMessages);
+//       // Try to parse specific errors
+//       const logs = txDetails?.meta?.logMessages || [];
+//       if (logs.some(log => log.includes("Error: DisproportionateLiquidity"))) {
+//         return { success: false, message: "❌ Failed to add liquidity: DisproportionateLiquidity. The amounts provided do not match the required pool ratio." };
+//       }
+//       if (logs.some(log => log.includes("ConstraintSeeds"))) {
+//         return { success: false, message: "❌ Failed to add liquidity: Pool authority PDA mismatch (ConstraintSeeds)." };
+//       }
+//       throw new Error(`Transaction confirmed but failed: ${confirmation.value.err}`);
+//     }
+
+//     console.log("Liquidity added successfully!");
+//     const explorerUrl = getExplorerLink(signature, network); // Use helper
+
+//     return {
+//       success: true,
+//       message: `Successfully added liquidity to ${tokenASymbol}/${tokenBSymbol} pool.`,
+//       signature,
+//       explorerUrl,
+//     };
+
+//   } catch (error: any) {
+//     console.error("Failed to add liquidity:", error);
+//     let message = `Failed to add liquidity: ${error.message || error.toString()}`;
+//     // Add specific error checks if needed
+//     const errorLogs = error?.logs as string[] | undefined;
+//     if (errorLogs) {
+//       console.error("Error Logs:", errorLogs);
+//       if (errorLogs.some((log: string) => log.includes("DisproportionateLiquidity"))) {
+//         message = `❌ Failed to add liquidity: DisproportionateLiquidity. The amounts provided do not match the required pool ratio.`;
+//       } else if (errorLogs.some((log: string) => log.includes("insufficient lamports"))) {
+//         message = `❌ Failed to add liquidity: Insufficient SOL balance for fees.`;
+//       } else if (errorLogs.some((log: string) => log.includes("ConstraintTokenOwner"))) {
+//         message = `❌ Failed to add liquidity: Token account ownership constraint failed. Check vault/user accounts.`;
+//       }
+//     } else if (error.message?.includes("Attempt to debit an account but found no record of a prior credit")) {
+//       message = `❌ Failed to add liquidity: Insufficient balance for one of the tokens.`;
+//     }
+//     return { success: false, message };
+//   }
+// }
 
 export async function addLiquidityToPool(
   connection: Connection,
-  wallet: WalletContextState,
+  wallet: WalletContextState, // Use the specific type from wallet-adapter
   tokenASymbol: string,
   tokenBSymbol: string,
-  liquidityAmountA: number = 1,
-  liquidityAmountB: number = 1,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
-
+  liquidityAmountA: number, // Removed default values, should be provided by caller
+  liquidityAmountB: number, // Removed default values, should be provided by caller
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
 ): Promise<{
   success: boolean;
   message: string;
@@ -2452,306 +3404,320 @@ export async function addLiquidityToPool(
   explorerUrl?: string;
 }> {
   try {
-    if (!wallet.connected || !wallet.publicKey) {
-      return {
-        success: false,
-        message: "Wallet not connected",
-      };
+    // 1. Initial Checks
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      return { success: false, message: "Wallet not connected or doesn't support signing." };
+    }
+    if (liquidityAmountA <= 0 || liquidityAmountB <= 0) {
+      return { success: false, message: "Liquidity amounts must be positive." };
     }
 
     const program = getProgram(connection, wallet);
+    const authority = wallet.publicKey;
+    console.log(`🚀 Adding liquidity: ${liquidityAmountA} ${tokenASymbol} + ${liquidityAmountB} ${tokenBSymbol} on ${network}`);
 
-    let tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
-    let tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network)
+    // 2. Get Token Info & Mints (Handle SOL)
+    const tokenAInfo = await getOrCreateToken(connection, wallet, tokenASymbol, network);
+    const tokenBInfo = await getOrCreateToken(connection, wallet, tokenBSymbol, network);
 
     if (!tokenAInfo || !tokenBInfo) {
-      return {
-        success: false,
-        message: "Failed to find token information"
-      };
+      return { success: false, message: "Failed to find token information for liquidity addition." };
     }
 
     const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+    const tokenAIsSol = tokenASymbol.toUpperCase() === 'SOL';
+    const tokenBIsSol = tokenBSymbol.toUpperCase() === 'SOL';
 
-    if (tokenAInfo && tokenAInfo.symbol === "SOL") {
-      tokenAInfo = {
-        ...tokenAInfo,
-        mint: wrappedSolMint
-      }
-    }
+    // Store original mints based on input symbols BEFORE sorting
+    const originalMintA = tokenAIsSol ? wrappedSolMint : tokenAInfo.mint;
+    const originalMintB = tokenBIsSol ? wrappedSolMint : tokenBInfo.mint;
+    const decimalsA = tokenAInfo.decimals;
+    const decimalsB = tokenBInfo.decimals;
 
-    if (tokenBInfo && tokenBInfo.symbol === "SOL") {
-      tokenBInfo = {
-        ...tokenBInfo,
-        mint: wrappedSolMint
-      }
-    }
+    console.log(` Original Mint A (${tokenASymbol}): ${originalMintA.toBase58()}`);
+    console.log(` Original Mint B (${tokenBSymbol}): ${originalMintB.toBase58()}`);
 
-
-
-    let [firstToken, secondToken] = [tokenAInfo, tokenBInfo].sort((a, b) => a.mint.toBuffer().compare(b.mint.toBuffer()));
-
-    const firstAmount = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? liquidityAmountA : liquidityAmountB;
-
-    const secondAmount = firstToken.symbol.toUpperCase() === tokenASymbol.toUpperCase() ? liquidityAmountB : liquidityAmountA;
-
-    const { poolPda, poolAuthorityPda } = await getPoolPDAs(
+    // 3. Get Pool PDA (using original mints for lookup)
+    // getPoolPDAs should handle internal sorting for consistent PDA derivation
+    const { poolPda } = await getPoolPDAs(
       program.programId,
-      firstToken.mint,
-      secondToken.mint
+      originalMintA, // Pass original mint A
+      originalMintB  // Pass original mint B
     );
+    console.log(` Derived Pool PDA: ${poolPda.toBase58()}`);
 
+    // 4. Fetch Pool State
+    console.log(" Fetching pool state...");
+    let poolAccount;
     try {
-      await program.account.liquidityPool.fetch(poolPda);
+      poolAccount = await program.account.liquidityPool.fetch(poolPda);
+      console.log(` Pool State Mint A: ${poolAccount.tokenAMint.toString()}`);
+      console.log(` Pool State Mint B: ${poolAccount.tokenBMint.toString()}`);
+      console.log(` Pool State Bump: ${poolAccount.bump}`);
+      console.log(` Pool State Vault A: ${poolAccount.tokenAVault.toString()}`);
+      console.log(` Pool State Vault B: ${poolAccount.tokenBVault.toString()}`);
+      console.log(" Pool account fetched successfully.");
     } catch (e) {
+      console.error("Error fetching pool account:", e);
       return {
         success: false,
-        message: `Pool for ${tokenASymbol}/${tokenBSymbol} doesn't exist yet. Create it First!`,
+        message: `Liquidity pool for ${tokenASymbol}/${tokenBSymbol} not found. Please create it first.`,
       };
     }
 
-    let userTokenAAccount = await getAssociatedTokenAddress(firstToken.mint, wallet.publicKey);
-    let userTokenBAccount = await getAssociatedTokenAddress(secondToken.mint, wallet.publicKey)
+    // 5. Derive Pool Authority & Vaults using *Pool State* Mints and Canonical Bump
+    // This is crucial because the program constraints use these seeds and the canonical bump.
+    const [derivedPoolAuthorityPda, derivedBump] = await PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("pool"), // Use the SAME seed as in your program's #[account(seeds = ...)]
+        poolAccount.tokenAMint.toBuffer(), // Use sorted mint A from pool state
+        poolAccount.tokenBMint.toBuffer(), // Use sorted mint B from pool state
+      ],
+      program.programId
+    );
+    console.log(` Derived Pool Authority PDA (using state mints, canonical bump ${derivedBump}): ${derivedPoolAuthorityPda.toString()}`);
 
-    const needsToWrapSol = firstToken.symbol === 'SOL' || secondToken.symbol === 'SOL';
-    const solAmount = firstToken.symbol === 'SOL' ? firstAmount : (secondToken.symbol === 'SOL' ? secondAmount : 0);
+    // Derive the expected vault ATAs based on the derived pool authority and sorted mints from state
+    const derivedVaultA = await getAssociatedTokenAddress(
+      poolAccount.tokenAMint,      // Pool's A mint (sorted)
+      derivedPoolAuthorityPda,   // Authority PDA derived using sorted mints + canonical bump
+      true                       // Allow off-curve (standard for ATAs derived with PDA owner)
+    );
+    const derivedVaultB = await getAssociatedTokenAddress(
+      poolAccount.tokenBMint,      // Pool's B mint (sorted)
+      derivedPoolAuthorityPda,   // Authority PDA derived using sorted mints + canonical bump
+      true                       // Allow off-curve
+    );
+    console.log(" Vault addresses derived by client (using derived authority):");
+    console.log(`  Derived Vault A: ${derivedVaultA.toString()}`);
+    console.log(`  Derived Vault B: ${derivedVaultB.toString()}`);
 
-    if (needsToWrapSol) {
-      console.log(`SOL detected in liquidity pair, will wrap ${solAmount} SOL automatically...`);
+    // Sanity check against stored vaults (optional, for debugging)
+    if (!derivedVaultA.equals(poolAccount.tokenAVault)) {
+      console.warn("WARNING: Derived Vault A does NOT match stored Vault A in pool state!");
+    }
+    if (!derivedVaultB.equals(poolAccount.tokenBVault)) {
+      console.warn("WARNING: Derived Vault B does NOT match stored Vault B in pool state!");
+    }
+    // *** Use the DERIVED vaults for the instruction call ***
+    const tokenAVaultToUse = derivedVaultA;
+    const tokenBVaultToUse = derivedVaultB;
 
-      const solBalance = await connection.getBalance(wallet.publicKey);
-      console.log(`Native SOL balance: ${solBalance / LAMPORTS_PER_SOL} SOL`)
+    // 6. Get User's Source ATAs & Handle SOL Wrapping (Atomically)
+    let userSourceTokenAccountA = await getAssociatedTokenAddress(originalMintA, authority);
+    let userSourceTokenAccountB = await getAssociatedTokenAddress(originalMintB, authority);
+    console.log(` User Source ATA A (${tokenASymbol}): ${userSourceTokenAccountA.toBase58()}`);
+    console.log(` User Source ATA B (${tokenBSymbol}): ${userSourceTokenAccountB.toBase58()}`);
 
-      if (solBalance < solAmount * LAMPORTS_PER_SOL) {
-        return {
-          success: false,
-          message: `Not enough SOL. You have ${solBalance / LAMPORTS_PER_SOL}, but need ${solAmount}`
-        }
-      }
+    const solAmountToWrap = tokenAIsSol ? liquidityAmountA : (tokenBIsSol ? liquidityAmountB : 0);
+    const instructions: TransactionInstruction[] = [];
+    let wrappedSolATA: PublicKey | null = null; // Keep track if we created/used wSOL ATA
 
+    if (solAmountToWrap > 0) {
+      console.log(` Wrapping ${solAmountToWrap} SOL...`);
+      const lamportsToWrap = new BN(solAmountToWrap * LAMPORTS_PER_SOL);
+      wrappedSolATA = await getAssociatedTokenAddress(wrappedSolMint, authority); // wSOL ATA
+
+      // Check if wSOL ATA exists
+      let ataInfo: TokenAccount | null = null;
       try {
-        console.log("Attempting to wrap SOL...");
-        const wrapResult = await wrapSol(
-          connection,
-          wallet,
-          solAmount,
-          network,
-        );
-
-        if (!wrapResult.success) {
-          return {
-            success: false,
-            message: `Failed to wrap SOL: ${wrapResult.message}`
-          };
+        ataInfo = await getAccount(connection, wrappedSolATA); // Use getAccount for robustness
+        console.log(" wSOL ATA already exists.");
+      } catch (error: any) {
+        // Check if error is "Account not found"
+        if (error.name === 'TokenAccountNotFoundError') {
+          console.log(" Creating ATA for wSOL...");
+          instructions.push(
+            createAssociatedTokenAccountInstruction(authority, wrappedSolATA, authority, wrappedSolMint)
+          );
+        } else {
+          // Rethrow other errors
+          console.error("Error checking wSOL ATA:", error);
+          throw error;
         }
+      }
 
-        console.log(`Successfully wrapped  ${solAmount} SOL, Rechecking balances...`)
+      // Add instructions to transfer SOL and sync
+      instructions.push(
+        SystemProgram.transfer({ fromPubkey: authority, toPubkey: wrappedSolATA, lamports: lamportsToWrap.toNumber() }),
+        createSyncNativeInstruction(wrappedSolATA)
+      );
 
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
-        const wrappedSolATA = await getAssociatedTokenAddress(
-          wrappedSolMint,
-          wallet.publicKey
-        );
-
-        if (firstToken.symbol === "SOL") {
-          const wrappedSolBalance = await getTokenBalance(connection, wrappedSolATA) || 0;
-          console.log(`Wrapped SOL balance: ${wrappedSolBalance} wSOL`);
-
-          if (wrappedSolBalance >= firstAmount) {
-            userTokenAAccount = wrappedSolATA;
-          }
-
-          firstToken = {
-            ...firstToken,
-            mint: wrappedSolMint,
-
-          }
-
-        } else if (secondToken.symbol === "SOL") {
-          const wrappedSolBalance = await getTokenBalance(connection,
-            wrappedSolATA) || 0;
-
-          console.log(`Wrapped SOL balance: ${wrappedSolBalance} wSOL`);
-
-          if (wrappedSolBalance >= secondAmount) {
-            userTokenBAccount = wrappedSolATA;
-          }
-
-          secondToken = {
-            ...secondToken,
-            mint: wrappedSolMint,
-          }
-        }
-
-        const updatedFirstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
-        const updatedSecondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
-
-        console.log(`Updated balances: ${updatedFirstTokenBalance} ${firstToken.symbol} and ${updatedSecondTokenBalance} ${secondToken.symbol}`);
-
-        if (updatedFirstTokenBalance < firstAmount) {
-          return {
-            success: false,
-            message: `Not enough ${firstToken.symbol} tokens after wrapping. You have ${updatedFirstTokenBalance}, but need ${firstAmount}`,
-          }
-        }
-
-        if (updatedSecondTokenBalance < secondAmount) {
-          return {
-            success: false,
-            message: `Not enough ${secondToken.symbol} tokens after wrapping. You have ${updatedSecondTokenBalance}, but need ${secondAmount}`,
-          }
-        }
-      } catch (err: any) {
-        return {
-          success: false,
-          message: `Error wrapping SOL: ${err.message}`
-        };
+      // Update the source account variable that will be used in the addLiquidity instruction
+      if (tokenAIsSol) {
+        userSourceTokenAccountA = wrappedSolATA;
+        console.log(` User source for ${tokenASymbol} updated to wSOL ATA: ${userSourceTokenAccountA.toBase58()}`);
+      } else { // tokenBIsSol must be true
+        userSourceTokenAccountB = wrappedSolATA;
+        console.log(` User source for ${tokenBSymbol} updated to wSOL ATA: ${userSourceTokenAccountB.toBase58()}`);
       }
     }
 
-    const firstTokenBalance = await getTokenBalance(connection, userTokenAAccount) || 0;
-    const secondTokenBalance = await getTokenBalance(connection, userTokenBAccount) || 0;
+    // 7. Convert Amounts & Determine Final Order for Instruction
+    const amountABaseUnits = new BN(liquidityAmountA * Math.pow(10, decimalsA)); // Amount for original A
+    const amountBBaseUnits = new BN(liquidityAmountB * Math.pow(10, decimalsB)); // Amount for original B
 
-    console.log(`User has ${firstTokenBalance} ${firstToken.symbol} and ${secondTokenBalance} ${secondToken.symbol}`);
+    let finalAmountAForPool: BN;
+    let finalAmountBForPool: BN;
+    let finalUserTokenAAccountForPool: PublicKey;
+    let finalUserTokenBAccountForPool: PublicKey;
 
-    if (firstTokenBalance < firstAmount) {
-      return {
-        success: false,
-        message: `Not enough ${firstToken.symbol}. You have ${firstTokenBalance}, but need ${firstAmount}`,
-      };
+    // Compare ORIGINAL input mint A with the POOL's state mint A
+    if (originalMintA.equals(poolAccount.tokenAMint)) {
+      // Order matches pool state: Pool A = Original A, Pool B = Original B
+      finalAmountAForPool = amountABaseUnits;
+      finalAmountBForPool = amountBBaseUnits;
+      finalUserTokenAAccountForPool = userSourceTokenAccountA; // User's ATA for Original A
+      finalUserTokenBAccountForPool = userSourceTokenAccountB; // User's ATA for Original B
+      console.log(" Pool order matches input order (A=A, B=B). Using amounts/accounts as is.");
+    } else if (originalMintA.equals(poolAccount.tokenBMint)) {
+      // Order is swapped vs pool state: Pool A = Original B, Pool B = Original A
+      finalAmountAForPool = amountBBaseUnits; // Amount for Pool's A (which is original B)
+      finalAmountBForPool = amountABaseUnits; // Amount for Pool's B (which is original A)
+      finalUserTokenAAccountForPool = userSourceTokenAccountB; // User's ATA for Original B (matches Pool's A Mint)
+      finalUserTokenBAccountForPool = userSourceTokenAccountA; // User's ATA for Original A (matches Pool's B Mint)
+      console.log(" Pool order swapped vs input order (A=B, B=A). Re-ordering amounts/accounts for instruction.");
+    } else {
+      // This should ideally not happen if pool exists and mints are correct
+      console.error("CRITICAL MISMATCH: Original input mints do not match pool state mints.");
+      return { success: false, message: "Internal error: Token mint mismatch between input and pool state." };
     }
 
-    if (secondTokenBalance < secondAmount) {
-      return {
-        success: false,
-        message: `Not enough ${secondToken.symbol}. You have ${secondTokenBalance}, but need ${secondAmount}`,
-      };
-    };
+    // 8. Build the Add Liquidity Transaction
+    const tx = new Transaction();
 
-    const tokenAVault = await getAssociatedTokenAddress(
-      firstToken.mint,
-      poolAuthorityPda,
-      true
+    // Add wrapping instructions (if any) FIRST
+    if (instructions.length > 0) {
+      tx.add(...instructions);
+    }
+
+    // Add the AddLiquidity instruction
+    console.log(" Adding AddLiquidity instruction...");
+    console.log("  Accounts for instruction:");
+    console.log(`   pool: ${poolPda.toBase58()}`);
+    console.log(`   poolAuthority: ${derivedPoolAuthorityPda.toBase58()}`);
+    console.log(`   tokenAMint (Pool's A): ${poolAccount.tokenAMint.toBase58()}`);
+    console.log(`   tokenBMint (Pool's B): ${poolAccount.tokenBMint.toBase58()}`);
+    console.log(`   tokenAVault (Pool's A): ${tokenAVaultToUse.toBase58()}`);
+    console.log(`   tokenBVault (Pool's B): ${tokenBVaultToUse.toBase58()}`);
+    console.log(`   userTokenAAccount (For Pool's A): ${finalUserTokenAAccountForPool.toBase58()}`);
+    console.log(`   userTokenBAccount (For Pool's B): ${finalUserTokenBAccountForPool.toBase58()}`);
+    console.log(`   userAuthority: ${authority.toBase58()}`);
+    console.log(`  Amounts for instruction:`);
+    console.log(`   amountA (Pool's A): ${finalAmountAForPool.toString()}`);
+    console.log(`   amountB (Pool's B): ${finalAmountBForPool.toString()}`);
+
+    tx.add(
+      await program.methods
+        .addLiquidity(finalAmountAForPool, finalAmountBForPool) // Use amounts ordered for the pool
+        .accounts({
+          pool: poolPda,
+          poolAuthority: derivedPoolAuthorityPda, // Use the PDA derived with canonical bump
+          tokenAMint: poolAccount.tokenAMint,      // Pool's A Mint (from state)
+          tokenBMint: poolAccount.tokenBMint,      // Pool's B Mint (from state)
+          tokenAVault: tokenAVaultToUse,           // Pool's A Vault (derived)
+          tokenBVault: tokenBVaultToUse,           // Pool's B Vault (derived)
+          userTokenAAccount: finalUserTokenAAccountForPool, // User account corresponding to Pool's A Mint
+          userTokenBAccount: finalUserTokenBAccountForPool, // User account corresponding to Pool's B Mint
+          userAuthority: authority,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .instruction()
     );
 
-    const tokenBVault = await getAssociatedTokenAddress(
-      secondToken.mint,
-      poolAuthorityPda,
-      true
-    );
+    // Optional: Add instruction to close temporary wSOL account if desired
+    // Be careful with this - only close if you are sure the user doesn't need it otherwise.
+    // if (wrappedSolATA && shouldCloseWSolAccount) {
+    //    tx.add(createCloseAccountInstruction(wrappedSolATA, authority, authority));
+    // }
 
-    const transaction = new Transaction();
-    let vaultsNeedCreation = false;
+    // 9. Send and Confirm Transaction
+    console.log(" Sending add liquidity transaction...");
+    const signature = await wallet.sendTransaction(tx, connection);
+    console.log(" Transaction sent:", signature);
 
-    const tokenAVaultInfo = await connection.getAccountInfo(tokenAVault)
-    if (!tokenAVaultInfo) {
-      console.log("Token A vault does not exist, will create it")
-      vaultsNeedCreation = true;
-      transaction.add(
-        createAssociatedTokenAccountInstruction(
-          wallet.publicKey,
-          tokenAVault,
-          poolAuthorityPda,
-          firstToken.mint
-        )
-      )
-    }
+    console.log(" Confirming transaction...");
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
 
+    if (confirmation.value.err) {
+      // Try to get logs for better error diagnosis
+      const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+      console.error("Add Liquidity Transaction confirmation failed:", confirmation.value.err);
+      console.error("Transaction logs:", txDetails?.meta?.logMessages || "Logs not available");
 
-    const tokenBVaultInfo = await connection.getAccountInfo(tokenBVault);
-    if (!tokenBVaultInfo) {
-      console.log("Token B vault does not exist, will create it");
-      vaultsNeedCreation = true;
-      transaction.add(
-        createAssociatedTokenAccountInstruction(
-          wallet.publicKey,
-          tokenBVault,
-          poolAuthorityPda,
-          secondToken.mint
-        )
-      )
-    }
-
-
-    if (vaultsNeedCreation) {
-      console.log("Creating token vault accounts first...");
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = wallet.publicKey;
-
-      try {
-        const createVaultSignature = await wallet.sendTransaction(transaction, connection);
-        console.log("Creating vaults with signature:", createVaultSignature)
-
-        console.log("Waiting for vault creation confirmation...");
-        await connection.confirmTransaction(createVaultSignature, "confirmed");
-        console.log("Vaults created successfully!");
-
-        await new Promise(resolve => setTimeout(resolve, 5000))
-
-        const checkTokenAVault = await connection.getAccountInfo(tokenAVault);
-        const checkTokenBVault = await connection.getAccountInfo(tokenBVault);
-
-
-        if (!checkTokenAVault || !checkTokenBVault) {
-          return {
-            success: false,
-            message: "Failed to create token vaults. Please try again."
-          };
-        }
-
-        console.log("Vault accounts verified to exist:");
-        console.log(`- TokenA vault: ${checkTokenAVault ? "Created" : "Missing"}`);
-        console.log(`- TokenB vault: ${checkTokenBVault ? "Created" : "Missing"}`);
-      } catch (e: any) {
-        console.error("Error creating vaults accountS:", e);
-        return {
-          success: false,
-          message: `Failed to create vault accounts: ${e.message}`
-        }
+      // Parse specific errors from logs
+      const logs = txDetails?.meta?.logMessages || [];
+      if (logs.some(log => log.includes("Error: DisproportionateLiquidity"))) {
+        return { success: false, message: "❌ Failed: DisproportionateLiquidity. Amounts don't match pool ratio." };
       }
+      if (logs.some(log => log.includes("ConstraintSeeds"))) {
+        // This often means the poolAuthority PDA passed didn't match what the program derived.
+        // Double-check the seeds ("pool") and the mint order used for derivation.
+        return { success: false, message: "❌ Failed: Pool authority PDA mismatch (ConstraintSeeds). Check derivation logic." };
+      }
+      if (logs.some(log => log.includes("ConstraintTokenOwner"))) {
+        return { success: false, message: "❌ Failed: Token account ownership error. Check vault/user accounts." };
+      }
+      // Add more specific error checks based on your program's potential errors
+
+      // Generic failure message
+      throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmation.value.err)}`);
     }
 
-    const addLiquidityTx = await program.methods
-      .addLiquidity(
-        new BN(firstAmount * Math.pow(10, firstToken.decimals)),
-        new BN(secondAmount * Math.pow(10, secondToken.decimals))
-      )
-      .accounts({
-        pool: poolPda,
-        poolAuthority: poolAuthorityPda,
-        tokenAMint: firstToken.mint,
-        tokenBMint: secondToken.mint,
-        userTokenAAccount,
-        userTokenBAccount,
-        tokenAVault: tokenAVault,
-        tokenBVault: tokenBVault,
-        userAuthority: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      } as any)
-      .rpc()
-
-    console.log("Added liquidity:", addLiquidityTx);
-    const explorerUrl = network === "mainnet"
-      ? `https://explorer.solana.com/tx/${addLiquidityTx}`
-      : `https://explorer.solana.com/tx/${addLiquidityTx}?cluster=devnet`;
+    console.log("✅ Liquidity added successfully!");
+    const explorerUrl = getExplorerLink(signature, network);
 
     return {
       success: true,
-      message: `Successfully added liquidity to ${tokenASymbol}/${tokenBSymbol} pool`,
-      signature: addLiquidityTx,
+      message: `Successfully added ${liquidityAmountA} ${tokenASymbol} and ${liquidityAmountB} ${tokenBSymbol} liquidity.`,
+      signature,
       explorerUrl,
     };
-  } catch (err: any) {
-    console.error("Failed to add Liquidity to pool:", err);
-    return {
-      success: false,
-      message: `Failed to add liquidity: ${err.message}`,
+
+  } catch (error: any) {
+    console.error("💥 Failed to add liquidity:", error);
+    let message = `Failed to add liquidity: ${error.message || error.toString()}`;
+
+    // Attempt to parse logs from the error object itself if confirmation failed earlier
+    const errorLogs = error?.logs as string[] | undefined;
+    if (errorLogs) {
+      console.error("Error Logs:", errorLogs);
+      if (errorLogs.some((log: string) => log.includes("DisproportionateLiquidity"))) {
+        message = `❌ Failed: DisproportionateLiquidity. Amounts don't match pool ratio.`;
+      } else if (errorLogs.some((log: string) => log.includes("insufficient lamports"))) {
+        message = `❌ Failed: Insufficient SOL balance for transaction fees.`;
+      } else if (errorLogs.some((log: string) => log.includes("ConstraintTokenOwner"))) {
+        message = `❌ Failed: Token account ownership error. Check vault/user accounts.`;
+      } else if (errorLogs.some((log: string) => log.includes("ConstraintSeeds"))) {
+        message = `❌ Failed: Pool authority PDA mismatch (ConstraintSeeds). Check derivation logic.`;
+      }
+    } else if (error.message?.includes("Attempt to debit an account but found no record of a prior credit")) {
+      message = `❌ Failed: Insufficient balance for one of the tokens.`;
+    } else if (error.message?.includes("Transaction simulation failed")) {
+      // Extract logs if available within the simulation error message itself
+      const logsMatch = error.message.match(/Logs:\s*(\[[\s\S]*\])/);
+      const logsString = logsMatch ? logsMatch[1] : "[]";
+      try {
+        const logsArray = JSON.parse(logsString.replace(/\\"/g, '"')); // Handle escaped quotes
+        console.error("Simulation Logs:", logsArray);
+        if (logsArray.some((log: string) => log.includes("DisproportionateLiquidity"))) {
+          message = `❌ Failed: DisproportionateLiquidity. Amounts don't match pool ratio.`;
+        } else if (logsArray.some((log: string) => log.includes("ConstraintSeeds"))) {
+          message = `❌ Failed: Pool authority PDA mismatch (ConstraintSeeds). Check derivation logic.`;
+        }
+        // Add other checks from simulation logs if needed
+      } catch (parseError) {
+        console.error("Failed to parse simulation logs:", parseError);
+      }
     }
+
+    return { success: false, message };
   }
+}
+
+function getExplorerLink(signature: string, network: string): string {
+  const clusterParam = network === "mainnet" ? "" : `?cluster=${network === 'localnet' ? `custom&customUrl=${encodeURIComponent('http://localhost:8899')}` : network}`;
+  return `https://explorer.solana.com/tx/${signature}${clusterParam}`;
 }
 
 export async function wrapSol(
@@ -2819,16 +3785,172 @@ export async function wrapSol(
   }
 }
 
-// export function normalizeTokenAmounts(
-//   tokenAAmount: number,
-//   tokenADecimals: number,
-//   tokenBAmount: number,
-//   tokenBDecimals: number,
-//   tokenAPrice: number = 1,
-//   tokenBPrice: number = 1,
-// ): {
-//   normalizedAmountA: number,
-//   normalizedAmountB: number,
-// } {
-//   const tokenAValue 
-// }
+export function normalizeTokenAmounts(
+  tokenAAmount: number,
+  tokenADecimals: number,
+  tokenBAmount: number,
+  tokenBDecimals: number,
+  tokenAPrice: number = 1, // USD price of tokenA
+  tokenBPrice: number = 1  // USD price of tokenB
+): { normalizedAmountA: number, normalizedAmountB: number } {
+
+  // Calculate the actual value of each token contribution
+  const tokenAValue = tokenAAmount * tokenAPrice;
+  const tokenBValue = tokenBAmount * tokenBPrice;
+
+  // If values are already balanced, no adjustment needed
+  if (Math.abs(tokenAValue - tokenBValue) < 0.01) {
+    return { normalizedAmountA: tokenAAmount, normalizedAmountB: tokenBAmount };
+  }
+
+  // Otherwise, adjust to match value
+  if (tokenAValue > tokenBValue) {
+    // Keep tokenA amount, adjust tokenB to match value
+    const newTokenBAmount = tokenAValue / tokenBPrice;
+    return { normalizedAmountA: tokenAAmount, normalizedAmountB: newTokenBAmount };
+  } else {
+    // Keep tokenB amount, adjust tokenA to match value
+    const newTokenAAmount = tokenBValue / tokenAPrice;
+    return { normalizedAmountA: newTokenAAmount, normalizedAmountB: tokenBAmount };
+  }
+}
+
+export function suggestBalancedLiquidity(
+  tokenASymbol: String,
+  tokenBSymbol: string,
+): {
+  suggestedAAmount: number,
+  suggestedBAmount: number,
+} {
+  const tokenADecimals = tokenASymbol === "USDC" ? 6 : 9;
+  const tokenBDecimals = tokenBSymbol === "USDC" ? 6 : 9;
+
+  if (tokenADecimals === tokenBDecimals) {
+    return {
+      suggestedAAmount: 10,
+      suggestedBAmount: 10
+    }
+  }
+
+  if ((tokenASymbol === "USDC" && tokenBSymbol === "SOL") || (tokenASymbol === "SOL" && tokenBSymbol === "USDC")) {
+    const solPrice = 200;
+
+    if (tokenASymbol === "SOL") {
+      return {
+        suggestedAAmount: 1,
+        suggestedBAmount: solPrice
+      }
+    } else {
+      return {
+        suggestedAAmount: solPrice,
+        suggestedBAmount: 1
+      }
+    }
+  }
+
+  return {
+    suggestedAAmount: 10,
+    suggestedBAmount: 10
+  }
+}
+
+
+export async function getPoolExactRatio(
+  connection: Connection,
+  tokenA: string,
+  tokenB: string,
+  network: "localnet" | "devnet" | "mainnet" = "localnet"
+): Promise<{ tokenARatio: number, tokenBRatio: number, exactRatio: number, humanReadableRatio: string }> {
+  try {
+    const program = getProgram(connection, null);
+
+    const tokenAInfo = await getOrCreateToken(connection, null, tokenA, network);
+    const tokenBInfo = await getOrCreateToken(connection, null, tokenB, network);
+
+
+    if (!tokenAInfo || !tokenBInfo) {
+      throw new Error("Could not find token info");
+    }
+
+    const wrappedSolMint = new PublicKey("So11111111111111111111111111111111111111112");
+
+    let tokenAMint = tokenA.toUpperCase() === "SOL" ? wrappedSolMint : tokenAInfo.mint;
+    let tokenBMint = tokenB.toUpperCase() === "SOL" ? wrappedSolMint : tokenBInfo.mint;
+
+    const { poolPda } = await getPoolPDAs(program.programId, tokenAMint, tokenBMint);
+
+    const poolAccount = await program.account.liquidityPool.fetch(poolPda);
+
+    const vaultABalance = new BN((await connection.getTokenAccountBalance(poolAccount.tokenAVault)).value.amount);
+    const vaultBBalance = new BN((await connection.getTokenAccountBalance(poolAccount.tokenBVault)).value.amount);
+
+    console.log("Vault A Balance (raw):", vaultABalance.toString()); // Log raw balances
+    console.log("Vault B Balance (raw):", vaultBBalance.toString()); // Log raw balances
+
+    // Calculate the exact ratio needed
+    const exactRatio = vaultBBalance.isZero() ? 0 : Number(vaultABalance) / Number(vaultBBalance); // Avoid division by zero
+
+    // Generate nice round numbers that match the ratio
+    const gcd = vaultABalance.isZero() || vaultBBalance.isZero() ? 1 : calculateGCD(vaultABalance.toNumber(), vaultBBalance.toNumber()); // Handle zero balances
+
+    const tokenARatio = vaultABalance.isZero() ? 0 : vaultABalance.toNumber() / gcd;
+    const tokenBRatio = vaultBBalance.isZero() ? 0 : vaultBBalance.toNumber() / gcd;
+
+    // Calculate human-readable values
+    const tokenAValue = Number(vaultABalance) / Math.pow(10, tokenAInfo.decimals);
+    const tokenBValue = Number(vaultBBalance) / Math.pow(10, tokenBInfo.decimals);
+
+    console.log("Token A Value (human):", tokenAValue); // Log human-readable values
+    console.log("Token B Value (human):", tokenBValue); // Log human-readable values
+
+    // Find a simple ratio by dividing by the smaller non-zero value and rounding
+    const scaleFactor = Math.min(tokenAValue > 0 ? tokenAValue : Infinity, tokenBValue > 0 ? tokenBValue : Infinity);
+
+    // Handle cases where one or both values are zero or scaleFactor is Infinity
+    let simpleRatioA = 0;
+    let simpleRatioB = 0;
+    let humanReadableRatio = "Ratio calculation error (zero balance?)";
+
+    if (scaleFactor > 0 && scaleFactor !== Infinity) {
+      simpleRatioA = Math.round((tokenAValue / scaleFactor) * 100) / 100;
+      simpleRatioB = Math.round((tokenBValue / scaleFactor) * 100) / 100;
+      humanReadableRatio = `${simpleRatioA} ${tokenA} : ${simpleRatioB} ${tokenB}`;
+    } else if (tokenAValue > 0 && tokenBValue === 0) {
+      humanReadableRatio = `Pool only contains ${tokenA}. Add ${tokenB} to establish a ratio.`;
+    } else if (tokenBValue > 0 && tokenAValue === 0) {
+      humanReadableRatio = `Pool only contains ${tokenB}. Add ${tokenA} to establish a ratio.`;
+    } else {
+      humanReadableRatio = `Pool appears empty. Add initial liquidity.`;
+    }
+
+
+    console.log("Calculated Human Readable Ratio:", humanReadableRatio); // Log the final ratio string
+
+    return {
+      tokenARatio,
+      tokenBRatio,
+      exactRatio,
+      humanReadableRatio, // Ensure this is correctly assigned
+    };
+  } catch (error: any) {
+    console.error("Error getting pool ratio:", error);
+    // Rethrow or return a specific error structure if needed
+    // For now, let's return a default error state
+    return {
+      tokenARatio: 0,
+      tokenBRatio: 0,
+      exactRatio: 0,
+      humanReadableRatio: `Error fetching ratio: ${error.message}`
+    };
+  }
+}
+
+// Helper function to calculate Greatest Common Divisor
+function calculateGCD(a: number, b: number): number {
+  while (b) {
+    const t = b;
+    b = a % b;
+    a = t;
+  }
+  return a;
+}

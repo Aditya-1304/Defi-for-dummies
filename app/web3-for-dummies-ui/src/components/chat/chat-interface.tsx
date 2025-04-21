@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send, WalletMinimal } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { parsePaymentInstruction } from "@/services/nlp-service"
-import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool } from "@/services/solana-service"
+import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
@@ -141,6 +141,13 @@ export function ChatInterface() {
     toToken: '',
     amount: 0
   })
+  // const [pendingLiquidityAddition, setPendingLiquidityAddition] = useState<{
+  //   tokenA: string;
+  //   tokenB: string;
+  //   amountA: number;
+  //   amountB: number;
+  //   network: string;
+  // } | null>(null);
 
   const memoizedMessages = useMemo(() => messages, [messages])
   // Set isClient to true when component mounts on client side
@@ -208,17 +215,18 @@ export function ChatInterface() {
     router.push(`/swap?network=${networkParam}`);
   };
 
-  const handleSwapSuccess = (result:any) => {
+  const handleSwapSuccess = (result: any) => {
     addAIMessage(
       `✅ Successfully swapped ${result.inputAmount?.toFixed(6) || ''} ${result.fromTokenSymbol} for ${result.outputAmount?.toFixed(6) || ''} ${result.toTokenSymbol}.\n\n` +
       `View transaction in [Solana Explorer](${result.explorerUrl})`
-    )
-  }
+    );
+  };
 
   const handleSwapError = (error: any) => {
     console.error("Swap error:", error);
-    addAIMessage(`❌ Swap failed: ${error.message || "Unknown error"}`)
-  }
+    // Use the message from the error object if available
+    addAIMessage(`❌ Swap failed: ${error.message || error.error || "Unknown error"}`);
+  };
 
   const clearTokenCache = () => {
     try {
@@ -289,6 +297,69 @@ export function ChatInterface() {
     setIsLoading(false);
   };
 
+  function getLiquidityBalanceWarning(tokenA: string, tokenB: string, amountA: number, amountB: number): string | null {
+    if ((tokenA === 'SOL' && tokenB === 'USDC') || (tokenA === 'USDC' && tokenB === 'SOL')) {
+      const solAmount = tokenA === 'SOL' ? amountA : amountB;
+      const usdcAmount = tokenA === 'USDC' ? amountA : amountB;
+      
+      // Calculate the "ideal" USDC amount based on SOL
+      const idealUsdcAmount = solAmount * 200;
+      
+      // If there's a significant imbalance (more than 10% off)
+      if (Math.abs(usdcAmount - idealUsdcAmount) / idealUsdcAmount > 0.1) {
+        return `⚠️ Value imbalance detected! For ${solAmount} SOL, consider adding around ${idealUsdcAmount} USDC for balanced liquidity.`;
+      }
+    }
+    
+    return null;
+  }
+  function handleAddLiquidityCommand(tokenA: string, tokenB: string, amountA: number, amountB: number): string | null {
+    // First show a confirmation with price information
+    if ((tokenA === 'SOL' && tokenB === 'USDC') || (tokenA === 'USDC' && tokenB === 'SOL')) {
+      const solToken = tokenA === 'SOL' ? tokenA : tokenB;
+      const solAmount = tokenA === 'SOL' ? amountA : amountB;
+      const usdcAmount = tokenA === 'USDC' ? amountA : amountB;
+  
+      // Calculate the balance ratio based on VALUE (1 SOL = 200 USDC)
+      const idealUsdcForSol = solAmount * 200;
+      const valueRatio = solAmount > 0 ? usdcAmount / solAmount : 0;
+      const idealValueRatio = 200;
+  
+      // Check if the provided amounts deviate significantly from the ideal VALUE ratio
+      if (Math.abs(valueRatio - idealValueRatio) / idealValueRatio > 0.2) { // 20% deviation threshold
+  
+        // Calculate the suggested amounts based on the ideal value ratio
+        const suggestedUsdc = (solAmount * idealValueRatio).toFixed(2);
+        const suggestedSol = (usdcAmount / idealValueRatio).toFixed(4);
+  
+        let suggestion = "";
+        if (solAmount > 0) {
+           suggestion = `For ${solAmount} ${solToken}, you should ideally add ${suggestedUsdc} USDC. Try: "add liquidity ${solToken === 'SOL' ? 'SOL USDC' : 'USDC SOL'} ${solAmount} ${suggestedUsdc}"`;
+        } else if (usdcAmount > 0) {
+           suggestion = `For ${usdcAmount} USDC, you should ideally add ${suggestedSol} SOL. Try: "add liquidity ${solToken === 'SOL' ? 'SOL USDC' : 'USDC SOL'} ${suggestedSol} ${usdcAmount}"`;
+        }
+  
+  
+        return `⚠️ **Value Imbalance Detected!**
+        - You provided: ${amountA} ${tokenA} and ${amountB} ${tokenB}
+        - Ideal Value Ratio: 1 SOL ≈ 200 USDC
+        - ${suggestion}
+  
+        **Important:** The pool *also* requires an exact *token* ratio based on its current contents. Adding liquidity with the wrong ratio will fail. Check the pool's required ratio first if unsure.`;
+      }
+    }
+    // Return null to indicate no value warning
+    return null;
+  }
+
+  // function isConfirmationResponse(input: string): boolean {
+  //   const normalizedInput = input.toLowerCase();
+  //   return normalizedInput === "yes" || 
+  //          normalizedInput === "confirm" || 
+  //          normalizedInput === "proceed" || 
+  //          normalizedInput === "continue" ||
+  //          normalizedInput === "confirm add liquidity";
+  // }
   const handleNewChat = () => {
     // Clear messages in state
     const welcomeMessage = {
@@ -338,6 +409,40 @@ export function ChatInterface() {
     setIsLoading(true);
     
     try {
+
+      // if (pendingLiquidityAddition && isConfirmationResponse(userInput)) {
+      //   // User has confirmed they want to proceed with imbalanced liquidity
+      //   const { tokenA, tokenB, amountA, amountB, network } = pendingLiquidityAddition;
+        
+      //   addAIMessage(`Adding ${amountA} ${tokenA} and ${amountB} ${tokenB} as liquidity to the pool on ${network}...`);
+        
+      //   try {
+      //     const result = await addLiquidityToPool(
+      //       connection,
+      //       wallet,
+      //       tokenA,
+      //       tokenB,
+      //       amountA,
+      //       amountB,
+      //       network as "localnet" | "devnet" | "mainnet"
+      //     );
+      
+      //     if (result.success) {
+      //       const explorerUrl = result.explorerUrl || null;
+      //       addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`);
+      //     } else {
+      //       addAIMessage(`❌ ${result.message}`);
+      //     }
+      //   } catch (e: any) {
+      //     console.error("Add liquidity error:", e);
+      //     addAIMessage(`❌ Failed to add liquidity: ${e.message}`);
+      //   }
+        
+      //   // Reset the pending operation
+      //   setPendingLiquidityAddition(null);
+      //   setIsLoading(false);
+      //   return;
+      // }
       // Process with NLP
       const parsedInstruction = await parsePaymentInstruction(userInput)
 
@@ -364,6 +469,8 @@ export function ChatInterface() {
       const params = new URLSearchParams(window.location.search);
       const urlNetwork = params.get("network");
       const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+
+      
       
       if (parsedInstruction.isSwapRequest) {
         console.log("Handling as SWAP request:", parsedInstruction);
@@ -383,71 +490,128 @@ export function ChatInterface() {
           addAIMessage(`Looking up tokens and preparing to swap ${amount} ${fromTokenSymbol} for ${toTokenSymbol} on ${effectiveNetwork}...`);
 
           try {
-            const quote = await getSwapQuote(
-              connection,
-              fromTokenSymbol,
-              toTokenSymbol,
-              amount,
-              wallet,
-              effectiveNetwork as "localnet" | "devnet" | "mainnet"
-            );
-            if (!quote.success) {
+          //   const quote = await getSwapQuote(
+          //     connection,
+          //     fromTokenSymbol,
+          //     toTokenSymbol,
+          //     amount,
+          //     wallet,
+          //     effectiveNetwork as "localnet" | "devnet" | "mainnet"
+          //   );
+          //   if (!quote.success) {
 
-              if(quote.needsPoolCreation) {
-                addAIMessage(`${quote.message} Creating pool now...`);
+          //     if(quote.needsPoolCreation) {
+          //       addAIMessage(`${quote.message} Creating pool now...`);
 
-                const poolResult = await createLiquidityPool(
-                  connection,
-                  wallet,
-                  fromTokenSymbol,
-                  toTokenSymbol,
-                  1000,
-                  1000,
-                  effectiveNetwork as "localnet" | "devnet" | "mainnet"
-                );
-                if (poolResult.success) {
-                  addAIMessage(
-                    `✅ ${poolResult.message}\n\n` + 
-                    `View transaction in [Solana Explorer](${poolResult.explorerUrl})\n\n` +
-                    `Try swapping again now`
-                  );
-                }else {
-                  addAIMessage(`❌ ${poolResult.message}`)
-                }
-                setIsLoading(false);
-                return;
-              } else {
+          //       const poolResult = await createLiquidityPool(
+          //         connection,
+          //         wallet,
+          //         fromTokenSymbol,
+          //         toTokenSymbol,
+          //         1000,
+          //         1000,
+          //         effectiveNetwork as "localnet" | "devnet" | "mainnet"
+          //       );
+          //       if (poolResult.success) {
+          //         addAIMessage(
+          //           `✅ ${poolResult.message}\n\n` + 
+          //           `View transaction in [Solana Explorer](${poolResult.explorerUrl})\n\n` +
+          //           `Try swapping again now`
+          //         );
+          //       }else {
+          //         addAIMessage(`❌ ${poolResult.message}`)
+          //       }
+          //       setIsLoading(false);
+          //       return;
+          //     } else {
+          //     addAIMessage(`❌ ${quote.message || "Could not get a price quote for this swap."}`);
+          //     setIsLoading(false);
+          //     return;
+          //   }
+          // }
+
+          //   addAIMessage(
+          //     `Found a swap route: ${amount} ${fromTokenSymbol} -> ~${quote.expectedOutputAmount.toFixed(6)} ${toTokenSymbol}. Executing swap...`
+          //   );
+
+          //   const result = await executeSwap(
+          //     connection,
+          //     wallet,
+          //     fromTokenSymbol,
+          //     toTokenSymbol,
+          //     amount,
+          //     50,
+          //     effectiveNetwork as "localnet"| "devnet" | "mainnet"
+          //   );
+
+          //   if(result && result.success) {
+          //     const explorerUrl = result.explorerUrl || "";
+          //     const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
+
+          //     addAIMessage(
+          //       `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` + 
+          //       `View transaction in [Solana Explorer](${explorerUrl})` 
+          //     )
+          //   } else {
+          //     addAIMessage(`❌ Swap Failed: ${result?.message || "Unknown error during swap."}`)
+          //   }
+
+          const quote = await getSwapQuote(
+            connection,
+            fromTokenSymbol,
+            toTokenSymbol,
+            amount,
+            wallet, // Pass wallet here if needed by getSwapQuote for token lookups
+            effectiveNetwork as "localnet" | "devnet" | "mainnet"
+          );
+
+          if (!quote.success) {
+            // Check if the reason for failure is a missing pool
+            if (quote.needsPoolCreation) {
+              // *** NEW LOGIC: Ask user to create pool ***
+              addAIMessage(
+                `🤔 Pool not found for ${fromTokenSymbol}/${toTokenSymbol} on ${effectiveNetwork}.\n\n` +
+                `To swap these tokens, a liquidity pool needs to be created first. You can create one using a command like:\n` +
+                `\`create pool ${fromTokenSymbol} ${toTokenSymbol} <amount_${fromTokenSymbol}> <amount_${toTokenSymbol}>\`\n\n` +
+                `**Important:** When creating, provide initial amounts that respect the value ratio (e.g., for SOL/SPL pools on local/devnet, aim for 1 SOL ≈ 200 SPL value).`
+              );
+              // *** END OF NEW LOGIC ***
+            } else {
+              // Handle other quote errors (e.g., token not found, insufficient liquidity in pool)
               addAIMessage(`❌ ${quote.message || "Could not get a price quote for this swap."}`);
-              setIsLoading(false);
-              return;
             }
+            setIsLoading(false); // Stop loading as we are not proceeding with swap or auto-creation
+            return; // Exit the swap logic
           }
 
+          // If quote succeeded, proceed with execution
+          addAIMessage(
+            `Found a swap route: ${amount} ${fromTokenSymbol} -> ~${quote.expectedOutputAmount.toFixed(6)} ${toTokenSymbol}. Executing swap...`
+          );
+
+          const result = await executeSwap(
+            connection,
+            wallet,
+            fromTokenSymbol,
+            toTokenSymbol,
+            amount,
+            50, // Default slippage BPS (adjust as needed)
+            effectiveNetwork as "localnet" | "devnet" | "mainnet"
+          );
+
+          if (result && result.success) {
+            const explorerUrl = result.explorerUrl || "";
+            // Use actual output if available, otherwise fallback to quoted amount
+            const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
+
             addAIMessage(
-              `Found a swap route: ${amount} ${fromTokenSymbol} -> ~${quote.expectedOutputAmount.toFixed(6)} ${toTokenSymbol}. Executing swap...`
+              `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` +
+              `View transaction in [Solana Explorer](${explorerUrl})`
             );
-
-            const result = await executeSwap(
-              connection,
-              wallet,
-              fromTokenSymbol,
-              toTokenSymbol,
-              amount,
-              50,
-              effectiveNetwork as "localnet"| "devnet" | "mainnet"
-            );
-
-            if(result && result.success) {
-              const explorerUrl = result.explorerUrl || "";
-              const outputAmount = result.outputAmount?.toFixed(6) || quote.expectedOutputAmount.toFixed(6);
-
-              addAIMessage(
-                `✅ Successfully swapped ${amount} ${fromTokenSymbol} for ${outputAmount} ${toTokenSymbol}. \n\n` + 
-                `View transaction in [Solana Explorer](${explorerUrl})` 
-              )
-            } else {
-              addAIMessage(`❌ Swap Failed: ${result?.message || "Unknown error during swap."}`)
-            }
+          } else {
+            // Handle execution errors (slippage, confirmation timeout, etc.)
+            addAIMessage(`❌ Swap Failed: ${result?.message || "Unknown error during swap execution."}`);
+          }
           } catch (err: any) {
             console.error("Swap execution error:", err);
             addAIMessage(`❌ Swap error: ${err.message}`)
@@ -486,62 +650,131 @@ export function ChatInterface() {
             );
 
             if(result.success) {
-              const explorerUrl = result.explorerUrl || null
-              addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`)
+              const explorerUrl = result.explorerUrl || null;
+
+              if ((tokenA === "SOL" && tokenB === "USDC") || (tokenA === "USDC" && tokenB === "SOL")){
+                const solToken = tokenA ==="SOL" ? tokenA : tokenB;
+                const solAmount = tokenA === 'SOL' ? amountA : amountB;
+
+                addAIMessage(
+                  `✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}\n\n` +
+                  `💡 Tip: For balanced liquidity, remember that 1 SOL ≈ 200 USDC in value. ` + 
+                  `When adding more liquidity, try to maintain this ratio.`)            
+              }else {
+                addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`);
+
+              }
+              
             }else {
               addAIMessage(`❌ ${result.message}`)
             }
           }catch(e: any) {
             console.error("Create pool error:", e);
-            addAIMessage(`❌ Failed to create pool: ${e.message}`)
+            addAIMessage(e.message || `❌ Failed to create pool: Unknown error`);
           }
         }
         setIsLoading(false);
       }
+      
 
-      else if (parsedInstruction.isAddLiquidity) {
-        console.log("Handling as ADD LIQUIDITY request:", parsedInstruction);
-        if(!wallet.connected || !wallet.publicKey) {
-          addAIMessage("Please connect your wallet to add liquidity.");
-        } else {
-          const tokenA = parsedInstruction.tokenA || '';
-          const tokenB = parsedInstruction.tokenB || '';
-          const amountA = parsedInstruction.amountA || 1;
-          const amountB = parsedInstruction.amountB || 1;
+     else if (parsedInstruction.isAddLiquidity) {
+      console.log("Handling as ADD LIQUIDITY request:", parsedInstruction);
+      if (!wallet.connected || !wallet.publicKey) {
+        addAIMessage("Please connect your wallet to add liquidity.");
+      } else {
+        const tokenA = parsedInstruction.tokenA || '';
+        const tokenB = parsedInstruction.tokenB || '';
+        const amountA = parsedInstruction.amountA;
+        const amountB = parsedInstruction.amountB;
 
-          if(!tokenA || !tokenB) {
-            addAIMessage("Please specify both tokens for adding liquidity (e.g., 'add liquidity USDC SOL').");
-            setIsLoading(false);
-            return;
-          }
+        if (!tokenA || !tokenB) {
+          addAIMessage("Please specify both tokens for adding liquidity (e.g., 'add liquidity USDC SOL').");
+        }
+        // Check if amounts were provided
+        else if (amountA !== undefined && amountB !== undefined && amountA > 0 && amountB > 0) {
+          // Amounts were provided, check for VALUE imbalance first
+          const valueWarning = handleAddLiquidityCommand(tokenA, tokenB, amountA, amountB);
+          if (valueWarning) {
+            // Show the value warning and STOP. User needs to re-enter command.
+            addAIMessage(valueWarning);
+          } else {
+            // No value warning, proceed to check the POOL ratio and add liquidity
+            addAIMessage(`Checking pool ratio and adding ${amountA} ${tokenA} and ${amountB} ${tokenB} as liquidity on ${effectiveNetwork}...`);
+            try {
+               // Fetch the required pool ratio *before* attempting to add
+               const poolRatioData = await getPoolExactRatio(connection, tokenA, tokenB, effectiveNetwork as "localnet" | "devnet" | "mainnet");
 
-          addAIMessage(`Adding ${amountA} ${tokenA} and ${amountB} ${tokenB} as liquidity to the pool on  ${effectiveNetwork}...`);
+               // Optional: Add a check here to compare user's amountA/amountB ratio with poolRatioData.exactRatio
+               // If it doesn't match closely, show an error *before* sending the transaction.
+               // Example check (needs refinement based on decimals):
+               // const userRatio = amountB / amountA;
+               // const poolRatio = 1 / poolRatioData.exactRatio; // Adjust based on which token is A/B
+               // if (Math.abs(userRatio - poolRatio) / poolRatio > 0.001) { // Allow tiny deviation
+               //    addAIMessage(`❌ Error: Your provided ratio (${amountA}:${amountB}) doesn't match the required pool ratio (${poolRatioData.humanReadableRatio}). Please use the correct ratio.`);
+               //    setIsLoading(false);
+               //    return;
+               // }
 
-          try{
-            const result = await addLiquidityToPool(
-              connection,
-              wallet,
-              tokenA,
-              tokenB,
-              amountA,
-              amountB,
-              effectiveNetwork as "localnet"| "devnet" | "mainnet"
-            );
 
-            if (result.success) {
-              const explorerUrl = result.explorerUrl || null;
-              addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})`: ''}`)
-            } else {
-              addAIMessage(`❌ ${result.message}`);
+              // Proceed with adding liquidity
+              const result = await addLiquidityToPool(
+                connection,
+                wallet,
+                tokenA,
+                tokenB,
+                amountA,
+                amountB,
+                effectiveNetwork as "localnet" | "devnet" | "mainnet"
+              );
+
+              if (result.success) {
+                const explorerUrl = result.explorerUrl || null;
+                addAIMessage(`✅ ${result.message} ${explorerUrl ? `\n\nView transaction in [Solana Explorer](${explorerUrl})` : ''}`);
+              } else {
+                // Provide more specific feedback if it's the DisproportionateLiquidity error
+                if (result.message.includes("DisproportionateLiquidity")) {
+                  // Check if the ratio is extreme
+                  const ratioValue = poolRatioData.exactRatio; // Raw ratio
+                  const isExtreme = ratioValue > 10000 || ratioValue < 0.0001; // Example threshold for extreme
+
+                  let advice = `This means the amounts you provided (${amountA} ${tokenA} : ${amountB} ${tokenB}) don't exactly match the pool's required token ratio. The current required ratio is approximately:\n**${poolRatioData.humanReadableRatio}**`;
+
+                  if (isExtreme) {
+                    advice += `\n\n⚠️ **Warning:** This pool ratio is extremely skewed, likely due to incorrect initial liquidity or unbalanced swaps. It's recommended to **create a new pool** with a balanced value ratio (e.g., 'create pool USDC SOL 200 1').`;
+                  }
+
+                  addAIMessage(`❌ ${result.message}\n\n${advice}`);
+               } else {
+                  addAIMessage(`❌ ${result.message}`);
+               }
+              }
+            } catch (e: any) {
+              console.error("Add liquidity error:", e);
+              addAIMessage(`❌ Failed to add liquidity: ${e.message}`);
             }
+          }
+        } else {
+          // Amounts were NOT provided, show ratio guidance
+          try {
+            const poolRatioData = await getPoolExactRatio(connection, tokenA, tokenB, effectiveNetwork as "localnet" | "devnet" | "mainnet");
+            const ratioMessage = poolRatioData.humanReadableRatio
+              ? `To add liquidity to this pool, you must maintain the ratio: \n**${poolRatioData.humanReadableRatio}**`
+              : `Could not determine the exact pool ratio. Please specify amounts.`;
+            const exampleRatioA = poolRatioData.tokenARatio || 1;
+            const exampleRatioB = poolRatioData.tokenBRatio || 1;
+
+            addAIMessage(
+              `${ratioMessage}\n\n` +
+              `Example: "add liquidity ${tokenA} ${tokenB} ${exampleRatioA} ${exampleRatioB}"\n\n` +
+              `Or tell me how much ${tokenA} or ${tokenB} you want to add, and I'll calculate the other amount.`
+            );
           } catch (e: any) {
-            console.error("Add liquidity error:", e);
-            addAIMessage(`❌ Failed to add liquidity: ${e.message}`)
+            console.error("Error getting pool ratio:", e);
+            addAIMessage(`❌ Error fetching pool details. Pool might not exist yet. Try 'create pool ${tokenA} ${tokenB}'.`);
           }
         }
-        setIsLoading(false);
-        return;
       }
+    }
       // if (parsedInstruction.isBalanceCheck) {
       //   setIsLoading(true);
         
@@ -1288,8 +1521,8 @@ export function ChatInterface() {
           "Sorry, I didn't understand that. I can help with:\n" +
           "• Balance checks (`balance`, `list all tokens`)\n" +
           "• Minting test tokens (`mint 10 USDC`)\n" +
-          "• Swapping tokens (`swap 1 SOL for USDC`)\n" +
-          "• Adding liquidity (`add liquidity USDC SOL 5 10`)" +
+          "• Swapping tokens (`swap 1 SOL for USDC`) - Note: 1 SOL ≈ 200 USDC in value\n" +
+          "• Adding liquidity (`add liquidity SOL USDC 1 200`) - Maintain proper value ratio!\n" +
           "• Sending payments (`send 0.5 SOL to ADDRESS`)\n" +
           "• Burning tokens (`burn 5 NIX`, `burn 10 from mint ADDRESS`)\n" +
           "• Cleaning up tokens (`cleanup unknown tokens`, `cleanup all tokens`)\n" +
