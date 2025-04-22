@@ -530,7 +530,7 @@ pub struct AddLiquidity<'info> {
             pool.token_a_mint.as_ref(),
             pool.token_b_mint.as_ref(),
         ],
-        bump = pool.bump,
+        bump,
     )]
     pub pool_authority: AccountInfo<'info>,
 

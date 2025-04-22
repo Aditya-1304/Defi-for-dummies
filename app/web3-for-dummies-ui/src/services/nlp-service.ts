@@ -3,7 +3,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createLogger } from "@/utils/logger";
 
 const logger = createLogger("NLP-Service");
+let currentNetworkContext: "localnet" | "devnet" | "mainnet" = "devnet";
 
+export function setNetworkContext(network: "localnet" | "devnet" | "mainnet"): void {
+  console.log(`Setting network context to: ${network}`);
+  currentNetworkContext = network;
+}
+
+export function getNetworkContext(): "localnet" | "devnet" | "mainnet" {
+  return currentNetworkContext;
+}
 const parsedCommandCache: Record<string, PaymentInstruction> = {};
 
 // Predefined responses for common queries
@@ -13,7 +22,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show balance': {
@@ -21,7 +30,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show all balances': {
@@ -29,7 +38,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'wallet balance': {
@@ -37,7 +46,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'sol balance': {
@@ -45,7 +54,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: false,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint 10 usdc': {
@@ -54,7 +63,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 10,
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint usdc': {
@@ -63,7 +72,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 100,
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint 50 usdc': {
@@ -72,7 +81,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 50,  // This is explicitly 50, not 100
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup tokens': {
@@ -81,7 +90,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove unknown tokens': {
@@ -90,7 +99,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup unknown tokens': {
@@ -99,7 +108,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup adi tokens': {
@@ -108,7 +117,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove adi tokens': {
@@ -117,7 +126,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
 
@@ -128,7 +137,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
     burnTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn all adi tokens': {
@@ -138,7 +147,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
     burnTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 20 nix': {
@@ -149,7 +158,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 20,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 10 nix': {
@@ -160,7 +169,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 10,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 10 nix tokens': {
@@ -171,25 +180,25 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 10,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix token names': {
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix tokens name': {  // Add this variation
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix tokens': {  // Add this shorter variation
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'delete all tokens': {
@@ -197,7 +206,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'clean all tokens': {
@@ -205,7 +214,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove all tokens': {
@@ -213,35 +222,35 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list all': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list all tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show all tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'swap': {
@@ -249,6 +258,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap tokens': {
@@ -256,6 +266,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'token swap': {
@@ -263,6 +274,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap sol for usdc': {
@@ -306,6 +318,113 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     recipient: '$4',
     confidence: 1.0,
   },
+  'exchange tokens': {
+    isPayment: false,
+    isSwapRequest: true,
+    fromToken: '',
+    toToken: '',
+    amount: 1,
+    confidence: 1.0,
+  },
+
+  'add liquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'addliquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'add pool': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'devnet',
+    confidence: 0.8,
+  },
+  'create pool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true, // This is the key difference
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'devnet',
+    confidence: 0.9,
+  },
+  'createpool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'devnet',
+    confidence: 0.9,
+  },
+  'check pool sol usdc': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'SOL',
+    tokenB: 'USDC',
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'check pool usdc sol': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'USDC',
+    tokenB: 'SOL',
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'unwrap sol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'unwrap wsol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'convert wsol to sol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'close wsol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'devnet',
+    confidence: 1.0,
+  },
+  'unwrap': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'devnet',
+    confidence: 0.9,
+  }
 };
 
 export interface PaymentInstruction {
@@ -315,6 +434,16 @@ export interface PaymentInstruction {
   isMintRequest?: boolean;
   isTokenCleanup?: boolean;
   isSwapRequest?: boolean;
+  isAddLiquidity?: boolean;
+  isCreatePool?: boolean;
+  isPoolLiquidityCheck?: boolean;
+  isUnwrapSol?: boolean;
+  isHelpRequest?: boolean;
+  responseText?: string;
+  tokenA?: string;
+  tokenB?: string;
+  amountA?: number;
+  amountB?: number;
   cleanupTarget?: "unknown" | "all" | string[];
   burnTokens?: boolean;
   burnSpecificAmount?: boolean;
@@ -329,6 +458,9 @@ export interface PaymentInstruction {
   amount?: number;
   recipient?: string;
   network?: "localnet" | "devnet" | "mainnet";
+  estimatedReceiveAmount?: number;
+  originalMessage?: string;
+  needsConfirmation?: boolean;
   confidence: number;
   raw?: any;
 }
@@ -336,59 +468,186 @@ export interface PaymentInstruction {
 // Initialize Gemini API
 // Replace with your actual API key
 const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+const HELP_RESPONSE = `Hello! I'm your AI agent buddy to automate Solana transactions. Here's what I can do:
+- **Balance checks:** \`balance\`, \`list all tokens\`
+- **Minting test tokens:** \`mint 10 USDC\`
+- **Swapping tokens:** \`swap 1 SOL for USDC\`
+- **Creating liquidity pools:** \`create pool SOL USDC 1 200\`
+- **Adding liquidity:** \`add liquidity SOL USDC 1 200\`
+- **Checking pool liquidity:** \`check pool SOL USDC\`, \`show pool SOL USDC\`
+- **Sending payments:** \`send 0.5 SOL to ADDRESS\`
+- **Burning tokens:** \`burn 5 NIX\`, \`burn 10 from mint ADDRESS\`
+- **Cleaning up tokens:** \`cleanup unknown tokens\`, \`cleanup all tokens\`
+- **Unwrapping SOL:** \`unwrap sol\`
+- **Fixing token names:** \`fix token names\`
+- **Specify Network:** Add \`on mainnet\`, \`on localnet\` (defaults to devnet)
+- **Get Help:** \`help\`, \`hello\`
+
+After switching networks, You can refresh the page to get a new chat Or can continue the same chat both will work ^_^
+Devnet is generally slower than localnet, Request on devnet may take longer to response.
+It wont fail sometimes it fails to render on UI but u wont lose your fund. Don't worry, always check solana explorer for your transaction status.
+Mainnet is only dummy for now (It doesn't work)
+ENJOY!!
+`;
 
 // Create a safe instance of the API
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
+// export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
+//   try {
+
+//     const normalizedInput = message.trim().toLowerCase();
+
+//     if (normalizedInput.includes("devnet")) {
+//       setNetworkContext("devnet")
+//     } else if (normalizedInput.includes("mainnet")) {
+//       setNetworkContext("mainnet")
+//     } else if (normalizedInput.includes("localnet")) {
+//       setNetworkContext("localnet")
+//     }
+
+//     if (COMMON_PATTERNS[normalizedInput]) {
+//       logger.debug('Using predefined pattern match');
+
+//       const pattern = { ...COMMON_PATTERNS[normalizedInput] }
+
+//       if ('network' in pattern) {
+//         pattern.network = currentNetworkContext;
+//       }
+//       return pattern;
+//     }
+
+//     if (parsedCommandCache[normalizedInput]) {
+//       logger.debug('Using cached parsing result');
+//       return parsedCommandCache[normalizedInput];
+//     }
+
+//     if (lowerMessage === "hello" || lowerMessage === "help") {
+//       logger.info(`Help request detected for: ${lowerMessage}`);
+//       const helpInstruction: PaymentInstruction = {
+//         isPayment: false,
+//         isHelpRequest: true,
+//         responseText: HELP_RESPONSE,
+//         network: currentNetworkContext,
+//         confidence: 1.0,
+//       };
+//       parsedCommandCache[cacheKey] = helpInstruction;
+//       return helpInstruction;
+//     }
+
+//     let result: PaymentInstruction;
+//     // Only try Gemini if we have an API key
+//     if (genAI) {
+//       logger.debug("🤖 Attempting to parse with Gemini AI...");
+//       const geminiResult = await parseWithGemini(message);
+//       if (geminiResult) {
+//         logger.debug("✅ Successfully parsed with Gemini AI", geminiResult);
+//         result = geminiResult;
+
+//         if (geminiResult.confidence > 0.7) {
+//           parsedCommandCache[normalizedInput] = geminiResult;
+//         }
+
+//         return result;
+//       } else {
+//         logger.debug("⚠️ Gemini parsing returned null, falling back to regex");
+//         result = parseWithRegex(message);
+
+//         if (result.confidence > 0.8) {
+//           parsedCommandCache[normalizedInput] = result;
+//         }
+//       }
+//     } else {
+//       console.warn("⚠️ No Gemini API key found, using regex parser only");
+//     }
+
+//     // Fallback to regex-based parsing
+//     console.log("📝 Using regex-based parsing as fallback");
+//     return parseWithRegex(message);
+//   } catch (error) {
+//     console.error("❌ Error in parsePaymentInstruction:", error);
+//     console.log("📝 Falling back to regex parser due to error");
+//     return parseWithRegex(message);
+//   }
+// }
 export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
-  try {
+  const lowerMessage = message.trim().toLowerCase();
+  const cacheKey = `${lowerMessage}_${currentNetworkContext}`; // Include network in cache key
 
-    const normalizedInput = message.trim().toLowerCase();
-
-    if (COMMON_PATTERNS[normalizedInput]) {
-      logger.debug('Using predefined pattern match');
-      return COMMON_PATTERNS[normalizedInput];
-    }
-
-    if (parsedCommandCache[normalizedInput]) {
-      logger.debug('Using cached parsing result');
-      return parsedCommandCache[normalizedInput];
-    }
-
-    let result: PaymentInstruction;
-    // Only try Gemini if we have an API key
-    if (genAI) {
-      logger.debug("🤖 Attempting to parse with Gemini AI...");
-      const geminiResult = await parseWithGemini(message);
-      if (geminiResult) {
-        logger.debug("✅ Successfully parsed with Gemini AI", geminiResult);
-        result = geminiResult;
-
-        if (geminiResult.confidence > 0.7) {
-          parsedCommandCache[normalizedInput] = geminiResult;
-        }
-
-        return result;
-      } else {
-        logger.debug("⚠️ Gemini parsing returned null, falling back to regex");
-        result = parseWithRegex(message);
-
-        if (result.confidence > 0.8) {
-          parsedCommandCache[normalizedInput] = result;
-        }
-      }
-    } else {
-      console.warn("⚠️ No Gemini API key found, using regex parser only");
-    }
-
-    // Fallback to regex-based parsing
-    console.log("📝 Using regex-based parsing as fallback");
-    return parseWithRegex(message);
-  } catch (error) {
-    console.error("❌ Error in parsePaymentInstruction:", error);
-    console.log("📝 Falling back to regex parser due to error");
-    return parseWithRegex(message);
+  // 1. Check Cache
+  if (parsedCommandCache[cacheKey]) {
+    logger.debug(`Cache hit for: ${cacheKey}`);
+    return parsedCommandCache[cacheKey];
   }
+
+  // 2. Check for Help Keywords
+  const greetings = ["hello", "help", "hi", "hii", "hey", "yo", "sup", "what's up", "wassup", "good morning", "good afternoon", "good evening"];
+  if (greetings.includes(lowerMessage)) {
+    logger.info(`Help/Greeting request detected for: ${lowerMessage}`);
+    const helpInstruction: PaymentInstruction = {
+      isPayment: false,
+      isHelpRequest: true,
+      responseText: HELP_RESPONSE,
+      network: currentNetworkContext,
+      confidence: 1.0,
+      originalMessage: message,
+    };
+    parsedCommandCache[cacheKey] = helpInstruction; // Cache the help response
+    return helpInstruction;
+  }
+
+  // 3. Check Common Patterns
+  if (COMMON_PATTERNS[lowerMessage]) {
+    logger.info(`Common pattern matched: ${lowerMessage}`);
+    const instruction = {
+      ...COMMON_PATTERNS[lowerMessage],
+      network: COMMON_PATTERNS[lowerMessage].network || currentNetworkContext, // Ensure network context
+      originalMessage: message,
+    };
+    parsedCommandCache[cacheKey] = instruction;
+    return instruction;
+  }
+
+  // 4. Try Parsing with AI (if available and key exists)
+  let instruction: PaymentInstruction | null = null;
+  if (genAI) {
+    logger.info(`Parsing with AI: ${message}`);
+    instruction = await parseWithGemini(message);
+  }
+
+  // 5. Fallback to Regex if AI failed, had low confidence, or wasn't used
+  if (!instruction || instruction.confidence < 0.7) {
+    if (instruction) { // Log if AI result was discarded due to low confidence
+      logger.warn(`AI parsing confidence low (${instruction.confidence}), falling back to regex for: ${message}`);
+    } else if (genAI) { // Log if AI parsing failed entirely
+      logger.warn(`AI parsing failed, falling back to regex for: ${message}`);
+    } else { // Log if AI wasn't used (no API key)
+      logger.info(`Parsing with Regex (no AI key): ${message}`);
+    }
+    instruction = parseWithRegex(message); // Use regex parser
+  } else {
+    logger.info(`Using AI result (confidence: ${instruction.confidence}) for: ${message}`);
+  }
+
+  // 6. Final Adjustments (Network, Confirmation, Original Message)
+  // Ensure network context is set if missing from parsing
+  if (!instruction.network) {
+    instruction.network = currentNetworkContext;
+  }
+  instruction.originalMessage = message; // Store original message
+
+  // Add simple confirmation logic (example)
+  if (instruction.isPayment && instruction.amount && instruction.amount > 1 && instruction.token === 'SOL') {
+    instruction.needsConfirmation = true;
+  }
+  if (instruction.isSwapRequest && instruction.amount && instruction.amount > 1 && instruction.fromToken === 'SOL') {
+    instruction.needsConfirmation = true;
+  }
+
+  // 7. Cache and Return
+  parsedCommandCache[cacheKey] = instruction; // Cache the final result
+  logger.info("Final Parsed Instruction:", instruction);
+  return instruction;
 }
 
 async function parseWithGemini(message: string): Promise<PaymentInstruction | null> {
@@ -430,14 +689,41 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     11. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
     12. Mint address - for burning unknown tokens
     13. Is this a token swap request? (true/false)
+    14. Is this a add liquidity request? (true/false)
+    15. Is this a request to fix token names? (true/false)
+    16. Is this a request to burn tokens? (true/false)
+    17. Is this a request to remove unknown tokens? (true/false)
+    18. Is this a request to remove all tokens? (true/false)
+    19. Is this a request to remove specific tokens? (true/false)
+    20. Is this a request to burn specific tokens? (true/false)
+    21. Is this a request to create a pool? (true/false)
+    22. Is this a request to check pool liquidity? (true/false)
+    23. Is this a request to unwrap SOL? (true/false)
+    24. Is this a request to convert wrapped SOL to SOL? (true/false)
+    25. Is this a request for normal conversation? (true/false)
+
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
 
     for token swap request? (true/false)
-      - If true, set isPayment to false.
-      - Extract from_token, to_token, and amount if present.
-      - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
-      - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+    - If true, set isPayment to false.
+    - Extract from_token, to_token, and amount if present.
+    - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
+    - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+
+    for normal conversation:
+    user will use hello hii detect it and return the user the already generated help response
+
+    For pool liquidity checks:
+    - "check pool liquidity sol usdc" -> isPoolLiquidityCheck = true, tokenA = "SOL", tokenB = "USDC"
+    - "show pool details for usdc/nix" -> isPoolLiquidityCheck = true, tokenA = "USDC", tokenB = "NIX"
+
+    For unwrapping SOL requests:
+    - "unwrap sol" -> isUnwrapSol = true
+    - "convert wsol to sol" -> isUnwrapSol = true
+    - "unwrap my wrapped sol" -> isUnwrapSol = true
+    - "close wsol account" -> isUnwrapSol = true
+    
 
     
     For balance check requests:
@@ -450,6 +736,11 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - "mint 5 ADI" -> amount = 5, token = "ADI"
     - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
 
+
+    For adding liquidity to pools:
+    - "add liquidity to usdc to sol" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 1, amountB = 1
+    - "add liquidity usdc sol 5 10" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 5 , amountB = 10
+ 
    For token cleanup requests:
     - "cleanup tokens" -> isTokenCleanup = true, cleanupTarget = "unknown" (default to removing unknown tokens)
     - "remove unknown tokens" -> isTokenCleanup = true, cleanupTarget = "unknown"
@@ -497,19 +788,27 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isCompleteBalanceCheck": true/false,
       "isMintRequest": true/false,
       "isTokenCleanup": true/false,
-      "isSwapRequest": true/false, // Add this
+      "isSwapRequest": true/false,
+      "isAddLiquidity": true/false,
+      "isCreatePool": true/false,
+      "isPoolLiquidityCheck": true/false,
+      "isUnwrapSol": true/false,
+      "tokenA" : "token symbol" or null,
+      "tokenB" : "token symbol" or null,
+      "amountA": number or null,
+      "amountB": number or null,
       "burnSpecificAmount": true/false,
       "burnAmount": number or null,
       "burnByMintAddress": true/false,
       "mintAddress": "address" or null,
       "listAllTokens": true/false,
-      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", // Added "all"
-      "amount": number or null, // Amount for payment, mint, burn, or swap
-      "token": "SOL" or other token name, or null, // Token for payment, balance, mint, burn
-      "fromToken": "SOL" or other token name, or null, // Add this for swap
-      "toToken": "SOL" or other token name, or null, // Add this for swap
+      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", 
+      "amount": number or null, 
+      "token": "SOL" or other token name, or null, 
+      "fromToken": "SOL" or other token name, or null,
+      "toToken": "SOL" or other token name, or null, 
       "network": "localnet" or "devnet" or "mainnet",
-      "recipient": "address" or null, // Recipient for payment
+      "recipient": "address" or null, 
       "confidence": number between 0 and 1
     }
     `;
@@ -536,6 +835,22 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isMintRequest: !!parsedResult.isMintRequest,
       isTokenCleanup: !!parsedResult.isTokenCleanup,
       isSwapRequest: !!parsedResult.isSwapRequest, // Extract swap flag
+      isAddLiquidity: !!parsedResult.isAddLiquidity,
+      isCreatePool: !!parsedResult.isCreatePool,
+      isPoolLiquidityCheck: !!parsedResult.isPoolLiquidityCheck,
+      isUnwrapSol: !!parsedResult.isUnwrapSol,
+      tokenA: parsedResult.tokenA || undefined,
+      tokenB: parsedResult.tokenB || undefined,
+      amountA: parsedResult.amountA !== null && parsedResult.amountA !== undefined
+        ? (typeof parsedResult.amountA === 'number'
+          ? parsedResult.amountA
+          : parseFloat(String(parsedResult.amountA)))
+        : undefined,
+      amountB: parsedResult.amountB !== null && parsedResult.amountB !== undefined
+        ? (typeof parsedResult.amountB === 'number'
+          ? parsedResult.amountB
+          : parseFloat(String(parsedResult.amountB)))
+        : undefined,
       burnSpecificAmount: !!parsedResult.burnSpecificAmount,
       burnAmount: parsedResult.burnAmount || undefined,
       burnByMintAddress: !!parsedResult.burnByMintAddress,
@@ -551,8 +866,9 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       token: parsedResult.token || "SOL",
       fromToken: parsedResult.fromToken || undefined, // Extract fromToken
       toToken: parsedResult.toToken || undefined,   // Extract toToken
+      estimatedReceiveAmount: parsedResult.estimatedReceiveAmount || undefined,
       recipient: parsedResult.recipient || undefined,
-      network: parsedResult.network || "localnet",
+      network: parsedResult.network || currentNetworkContext,
       confidence: parsedResult.confidence || 0.8,
       raw: parsedResult
     };
@@ -567,7 +883,7 @@ function parseWithRegex(message: string): PaymentInstruction {
   // Convert message to lowercase for case-insensitive matching
   const lowerMessage = message.toLowerCase();
 
-  let network: "localnet" | "devnet" | "mainnet" = "localnet";
+  let network: "localnet" | "devnet" | "mainnet" = "devnet";
 
   const burnCommand = detectBurnCommand(message);
   if (burnCommand) {
@@ -576,10 +892,59 @@ function parseWithRegex(message: string): PaymentInstruction {
 
   if (lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
     network = "devnet";
+    setNetworkContext("devnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
     network = "mainnet";
+    setNetworkContext("mainnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
-    network = "localnet"
+    network = "localnet";
+    setNetworkContext("localnet"); // Update context when explicitly specified
+  }
+
+  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
+  const swapAltRegex = /swap\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+to\s+([a-z]+)/i;
+
+  const swapMatch = lowerMessage.match(swapRegex) || lowerMessage.match(swapAltRegex);
+
+  if (swapMatch) {
+    const amount = parseFloat(swapMatch[1]);
+    const fromToken = swapMatch[2].toUpperCase();
+    const toToken = swapMatch[3].toUpperCase();
+
+    // console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+    let estimatedReceiveAmount = amount;
+    if (fromToken === "USDC" && toToken === "SOL") {
+      estimatedReceiveAmount = amount / 200;
+      console.log(`Value estimate: ${amount} USDC = ${estimatedReceiveAmount} SOL`);
+
+    } else if (fromToken === 'SOL' && toToken === 'USDC') {
+      estimatedReceiveAmount = amount * 200;
+      console.log(`Value estimate: ${amount} SOL = ${estimatedReceiveAmount} USDC`);
+    }
+
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      amount,
+      fromToken,
+      toToken,
+      estimatedReceiveAmount,
+      network,
+      confidence: 0.95
+    };
+  }
+
+  // Also check for general swap keywords
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
 
   if (lowerMessage.includes('mint') ||
@@ -653,8 +1018,75 @@ function parseWithRegex(message: string): PaymentInstruction {
     }
   }
 
+
+  const createPoolPattern = /(?:create\s+(?:pool|liquidity)|createpool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const createpoolMatch = lowerMessage.match(createPoolPattern);
+
+  if (createpoolMatch) {
+    return {
+      isPayment: false,
+      isBalanceCheck: false,
+      isCompleteBalanceCheck: false,
+      isMintRequest: false,
+      isTokenCleanup: false,
+      isSwapRequest: false,
+      isAddLiquidity: false,
+      isCreatePool: true,
+      tokenA: createpoolMatch[1],
+      tokenB: createpoolMatch[2],
+      amountA: parseFloat(createpoolMatch[3]) || 2,
+      amountB: parseFloat(createpoolMatch[4]) || 2,
+      network: "localnet",
+      confidence: 0.95
+    };
+  }
+
+  const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const liquidityMatch = lowerMessage.match(addLiquidityRegex);
+  if (liquidityMatch || lowerMessage.includes("addliquidity")) {
+    let tokenA = '', tokenB = '';
+    let amountA = 1, amountB = 1;
+
+    if (liquidityMatch) {
+      tokenA = liquidityMatch[1].toUpperCase();
+      tokenB = liquidityMatch[2].toUpperCase();
+
+      if (liquidityMatch[3]) {
+        amountA = parseFloat(liquidityMatch[3]);
+      }
+
+      if (liquidityMatch[4]) {
+        amountB = parseFloat(liquidityMatch[4]);
+      }
+    }
+
+    return {
+      isPayment: false,
+      isAddLiquidity: true,
+      tokenA,
+      tokenB,
+      amountA,
+      amountB,
+      network,
+      confidence: liquidityMatch ? 0.95 : 0.8
+    };
+  }
+
   if (!hasPaymentKeyword) {
     return { isPayment: false, confidence: 0.9 };
+  }
+
+
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
   // Pattern for "send X [TOKEN] to [ADDRESS]"
   // Improved regex that's more flexible with formatting
