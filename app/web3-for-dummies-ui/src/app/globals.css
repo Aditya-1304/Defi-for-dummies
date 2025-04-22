@@ -125,7 +125,4 @@
   cursor: pointer !important;
 }
 
-/* Hide cursor on main container */
-.cursor-container {
-  cursor: none;
-}
+

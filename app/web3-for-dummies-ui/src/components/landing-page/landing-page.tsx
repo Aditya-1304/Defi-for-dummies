@@ -445,7 +445,7 @@ export function LandingPage() {
       </section>
 
       {/* Stats Section - Keep relevant stats */}
-      <section className="py-20 border-t border-b border-gray-800/60 bg-gradient-to-b from-gray-850/50 to-gray-900"> {/* Darker borders/bg */}
+      <section className="py-20 border-t border-b border-gray-800/60 bg-gradient-to-b from-gray-850/50 to-gray-900/50"> {/* Darker borders/bg */}
         <div className="w-full max-w-6xl mx-auto px-4"> {/* Added max-width and padding */}
           <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
             {stats.map((stat, index) => (
