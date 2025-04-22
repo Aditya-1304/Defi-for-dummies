@@ -481,7 +481,14 @@ const HELP_RESPONSE = `Hello! I'm your AI agent buddy to automate Solana transac
 - **Unwrapping SOL:** \`unwrap sol\`
 - **Fixing token names:** \`fix token names\`
 - **Specify Network:** Add \`on mainnet\`, \`on localnet\` (defaults to devnet)
-- **Get Help:** \`help\`, \`hello\``;
+- **Get Help:** \`help\`, \`hello\`
+
+After switching networks, You can refresh the page to get a new chat Or can continue the same chat both will work ^_^
+Devnet is generally slower than localnet, Request on devnet may take longer to response.
+It wont fail sometimes it fails to render on UI but u wont lose your fund. Don't worry, always check solana explorer for your transaction status.
+Mainnet is only dummy for now (It doesn't work)
+ENJOY!!
+`;
 
 // Create a safe instance of the API
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
@@ -574,8 +581,9 @@ export async function parsePaymentInstruction(message: string): Promise<PaymentI
   }
 
   // 2. Check for Help Keywords
-  if (lowerMessage === "hello" || lowerMessage === "help") {
-    logger.info(`Help request detected for: ${lowerMessage}`);
+  const greetings = ["hello", "help", "hi", "hii", "hey", "yo", "sup", "what's up", "wassup", "good morning", "good afternoon", "good evening"];
+  if (greetings.includes(lowerMessage)) {
+    logger.info(`Help/Greeting request detected for: ${lowerMessage}`);
     const helpInstruction: PaymentInstruction = {
       isPayment: false,
       isHelpRequest: true,
@@ -691,6 +699,8 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     21. Is this a request to create a pool? (true/false)
     22. Is this a request to check pool liquidity? (true/false)
     23. Is this a request to unwrap SOL? (true/false)
+    24. Is this a request to convert wrapped SOL to SOL? (true/false)
+    25. Is this a request for normal conversation? (true/false)
 
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
@@ -700,6 +710,9 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - Extract from_token, to_token, and amount if present.
     - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
     - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+
+    for normal conversation:
+    user will use hello hii detect it and return the user the already generated help response
 
     For pool liquidity checks:
     - "check pool liquidity sol usdc" -> isPoolLiquidityCheck = true, tokenA = "SOL", tokenB = "USDC"

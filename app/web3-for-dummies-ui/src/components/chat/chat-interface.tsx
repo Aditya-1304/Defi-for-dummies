@@ -109,7 +109,8 @@ const ChatInputForm = React.memo(({ onSendMessage, isLoading, walletConnected }:
         placeholder={walletConnected ? "Type 'send 10 USDC to address...'" : "Connect wallet to send payments..."}
         value={inputValue}
         onChange={(e) => setInputValue(e.target.value)}
-        className="flex-1 bg-gray-800 dark:bg-gray-800 light:bg-white border-gray-700 dark:border-gray-700 light:border-gray-300 text-gray-100 dark:text-gray-100 light:text-gray-800 placeholder:text-gray-500"
+        className="flex-1 bg-gray-800 dark:bg-gray-800 light:bg-white border-gray-700 dark:border-gray-700 light:border-gray-300 text-gray-100 dark:text-gray-100 light:text-gray-800 placeholder:text-gray-500 cursor-text" 
+      
       />
       <Button
         type="submit"
@@ -1827,7 +1828,7 @@ export function ChatInterface() {
           </AnimatePresence>
         </ScrollArea>
       </div>
-      <div className="border-t border-gray-800 dark:border-gray-800 light:border-gray-200 p-4 bg-gray-900 dark:bg-gray-900 light:bg-gray-50 sticky bottom-0 z-10 shadow-lg">
+      <div className="border-t border-gray-800 dark:border-gray-800 light:border-gray-200 p-4 bg-gray-900 dark:bg-gray-900 light:bg-gray-50 sticky bottom-0 z-10 shadow-lg ">
         <ChatInputForm 
           onSendMessage={handleInputSend} 
           isLoading={isLoading} 

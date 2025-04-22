@@ -121,7 +121,7 @@
   }
 }
 
-.magnetic-button, button, a, input, select, textarea, .interactive, .card, .badge, [role="button"] {
+.magnetic-button, button, a, select, textarea, .interactive, .card, .badge, [role="button"] {
   cursor: pointer !important;
 }
 
