@@ -3,6 +3,7 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNetwork } from "@/components/(ui)/network-context";
 import { useTokens } from "@/components/(ui)/token-context";
+import { setNetworkContext } from "@/services/nlp-service";
 
 export function NetworkSwitcher() {
   const { network, setNetwork } = useNetwork();
@@ -13,7 +14,10 @@ export function NetworkSwitcher() {
     
     // Update the network context instead of reloading the page
     setNetwork(newNetwork as "localnet" | "devnet" | "mainnet");
-
+    
+    // Add this line to update the network context
+    setNetworkContext(newNetwork as "localnet" | "devnet" | "mainnet");
+  
     refreshTokens();
   };
 

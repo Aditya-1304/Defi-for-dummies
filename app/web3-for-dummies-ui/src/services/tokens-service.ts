@@ -7,6 +7,7 @@ import {
   createBurnInstruction
 } from "@solana/spl-token";
 import * as web3 from '@solana/web3.js';
+import { createLogger } from "@/utils/logger";
 
 // Definition for token information
 export type TokenInfo = {
@@ -54,8 +55,13 @@ function getTokenMappingsFromLocalStorage(network: string): Record<string, {
 }
 
 const mintInfoCache: Record<string, any> = {};
+const logger = createLogger("Tokens-Service");
+
 
 let hasPreloaded = false;
+const WRAPPED_SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+const WRAPPED_SOL_INFO: TokenInfo = { mint: WRAPPED_SOL_MINT, decimals: 9, symbol: "SOL", name: "Wrapped SOL" }; // Added name for consistency
+
 
 
 // Cache tokens per network to reduce RPC calls
@@ -126,7 +132,7 @@ const DEFAULT_TOKEN_DECIMALS: Record<string, number> = {
   'USDC': 6,
   'USDT': 6,
   'SOL': 9,
-  'DEFAULT': 9
+  'DEFAULT': 6
 };
 
 /**
@@ -137,12 +143,59 @@ export async function getOrCreateToken(
   wallet: any, // Wallet adapter
   symbol: string,
   network: "localnet" | "devnet" | "mainnet" = "localnet"
-): Promise<TokenInfo> {
-  // 1. Check if we already have this token in cache
+): Promise<TokenInfo | null> {
+  console.log(`[getOrCreateToken] Called for symbol: ${symbol}, network: ${network}`) // Use logger
   const upperSymbol = symbol.toUpperCase();
+
+  if (upperSymbol === "SOL") {
+    console.log("[getOrCreateToken] Handling SOL symbol, returning Wrapped SOL info."); // Use logger
+    // Ensure it's cached (optional but good practice)
+    if (!tokenCache[network]) tokenCache[network] = {};
+    tokenCache[network]["SOL"] = WRAPPED_SOL_INFO;
+    // Optionally update localStorage if you persist SOL there using your specific function
+    // saveTokenMappingsToLocalStorage("SOL", WRAPPED_SOL_MINT.toBase58(), network, 9); // Example using your function signature
+    return WRAPPED_SOL_INFO;
+  }
+  // 1. Check if we already have this token in cache
   if (tokenCache[network][upperSymbol]) {
-    console.log(`Using cached ${upperSymbol} token`)
+    console.log(`[getOrCreateToken] Using cached ${upperSymbol} token`)
     return tokenCache[network][upperSymbol];
+  }
+  const persistedMappings = getTokenMappingsFromLocalStorage(network);
+  for (const [mintAddress, info] of Object.entries(persistedMappings)) {
+    // Ensure info has symbol property before comparing
+    if (info && info.symbol && info.symbol.toUpperCase() === upperSymbol) {
+      // *** Skip if it's the fake SOL mint from previous runs ***
+      // This check might be redundant now due to the top-level SOL handling, but keep for safety
+      if (upperSymbol === "SOL" && mintAddress !== WRAPPED_SOL_MINT.toBase58()) {
+        logger.warn(`[getOrCreateToken] Found non-wSOL mint (${mintAddress}) for symbol SOL in localStorage. Skipping.`); // Use logger
+        continue; // Ignore this entry, rely on the special handling above
+      }
+      // *** End Skip ***
+
+      console.log(`[getOrCreateToken] Found ${upperSymbol} in localStorage (Mint: ${mintAddress}). Verifying on-chain...`); // Use logger
+      const mint = new PublicKey(mintAddress);
+      try {
+        // Verify mint exists on-chain (important!)
+        const mintInfo = await getMint(connection, mint);
+        const verifiedTokenInfo: TokenInfo = {
+          mint: mint,
+          decimals: mintInfo.decimals,
+          symbol: upperSymbol,
+          name: `${upperSymbol} Token` // Or fetch name if stored
+        };
+        // Cache it in memory
+        if (!tokenCache[network]) tokenCache[network] = {};
+        tokenCache[network][upperSymbol] = verifiedTokenInfo;
+        console.log(`[getOrCreateToken] Verified and cached ${upperSymbol} from localStorage.`); // Use logger
+        return verifiedTokenInfo;
+      } catch (e) {
+        logger.error(`[getOrCreateToken] Failed to verify mint ${mintAddress} from localStorage. Removing entry.`, e); // Use logger
+        // Remove invalid entry from localStorage if verification fails
+        delete persistedMappings[mintAddress];
+        localStorage.setItem(`token-mappings-${network}`, JSON.stringify(persistedMappings));
+      }
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -182,31 +235,53 @@ export async function getOrCreateToken(
       };
 
       // Cache it for future use
+      if (!tokenCache[network]) tokenCache[network] = {}; // Ensure network cache exists
       tokenCache[network][upperSymbol] = tokenInfo;
+      console.log(`[getOrCreateToken] Found and cached known token ${upperSymbol}`);
       return tokenInfo;
     } catch (error) {
       console.error(`Failed to get info for known token ${upperSymbol}:`, error);
-      // Continue to create a new token if we couldn't find the known one
+      // Continue, maybe try creating if on devnet/localnet (handled below)
     }
   }
 
   // 3. For localnet or if the token isn't known, create a new one
-  if (network === "localnet" || network === "devnet") {
-    console.log(`Creating new token ${upperSymbol} on ${network}...`);
-    const tokenInfo = await createNewToken(connection, wallet, upperSymbol, network);
+  // if (network === "localnet" || network === "devnet") {
+  //   console.log(`Creating new token ${upperSymbol} on ${network}...`);
+  //   const tokenInfo = await createNewToken(connection, wallet, upperSymbol, network);
 
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`token_${network}_${upperSymbol}`, JSON.stringify({
-        address: tokenInfo.mint.toString(),
-        decimals: tokenInfo.decimals,
-      }));
+  //   if (typeof window !== 'undefined') {
+  //     localStorage.setItem(`token_${network}_${upperSymbol}`, JSON.stringify({
+  //       address: tokenInfo.mint.toString(),
+  //       decimals: tokenInfo.decimals,
+  //     }));
+  //   }
+  //   return tokenInfo;
+  // }
+  if ((network === "localnet" || network === "devnet") && wallet && wallet.publicKey && upperSymbol !== "SOL") { // Ensure we don't try to create SOL
+    console.log(`[getOrCreateToken] Token ${upperSymbol} not found. Attempting to create...`); // Use logger
+    try {
+      const newTokenInfo = await createNewToken(connection, wallet, upperSymbol, network); // Assuming createNewToken returns TokenInfo
+      if (newTokenInfo) {
+        // Add to cache
+        if (!tokenCache[network]) tokenCache[network] = {};
+        tokenCache[network][upperSymbol] = newTokenInfo;
+        // Add to localStorage using your specific function
+        saveTokenMappingsToLocalStorage(upperSymbol, newTokenInfo.mint.toBase58(), network, newTokenInfo.decimals); // Use your function signature
+        return newTokenInfo;
+      }
+    } catch (error) {
+      logger.error(`[getOrCreateToken] Failed to create new token ${upperSymbol}:`, error); // Use logger
+      // Fall through to return null
     }
-    return tokenInfo;
   }
 
   // 4. If we're on mainnet and token isn't known, we can't create it
-  throw new Error(`Token ${upperSymbol} not found on ${network}`);
+  console.warn(`[getOrCreateToken] Token ${upperSymbol} could not be found or created. Returning null.`);
+  return null;
 }
+
+
 
 /**
  * Create a new token for testing purposes
@@ -257,7 +332,7 @@ async function createNewToken(
     );
 
     // Get blockhash and sign transaction
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(); // Fetch both
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = wallet.publicKey;
 
@@ -272,11 +347,30 @@ async function createNewToken(
     const signature = await connection.sendRawTransaction(signedTransaction.serialize());
 
     console.log("Waiting for mint creation confirmation...");
-    await connection.confirmTransaction({
+    // Use the fetched lastValidBlockHeight and potentially increase timeout for localnet
+    const confirmation = await connection.confirmTransaction({
       signature,
       blockhash,
-      lastValidBlockHeight: await connection.getBlockHeight()
-    }, 'confirmed');
+      lastValidBlockHeight // Use the height fetched before sending
+    }, 'confirmed'); // You could add a longer timeout here if needed, e.g., { commitment: 'confirmed', confirmTransactionInitialTimeout: 60000 }
+
+    if (confirmation.value.err) {
+      throw new Error(`Mint creation transaction failed confirmation: ${JSON.stringify(confirmation.value.err)}`);
+    }
+    console.log("Mint creation confirmed.");
+    console.log("Verifying mint account owner...");
+    const mintAccountInfo = await connection.getAccountInfo(mintKeypair.publicKey);
+    if (!mintAccountInfo) {
+      console.error("Mint account not found after creation!");
+      throw new Error("Mint account creation failed verification.");
+    }
+    console.log(`Mint account owner: ${mintAccountInfo.owner.toBase58()}`);
+    if (!mintAccountInfo.owner.equals(TOKEN_PROGRAM_ID)) {
+      console.error(`Mint account owner is INCORRECT! Expected ${TOKEN_PROGRAM_ID.toBase58()}`);
+      throw new Error("Mint account created with incorrect owner.");
+    }
+    console.log("Mint account owner verified successfully.");
+
 
     console.log(`Token mint created with signature: ${signature}`);
 
@@ -321,6 +415,12 @@ export async function getTokenBalance(
 
     // Get token info (this will create the token if needed on localnet/devnet)
     const tokenInfo = await getOrCreateToken(connection, wallet, upperSymbol, network);
+    if (!tokenInfo) {
+      // If token couldn't be found or created, return 0 balance with default/unknown decimals
+      console.warn(`Could not get token info for ${upperSymbol} on ${network}. Returning 0 balance.`);
+      // You might want to decide on a default decimal value or handle this differently
+      return { balance: 0, decimals: DEFAULT_TOKEN_DECIMALS[upperSymbol] || DEFAULT_TOKEN_DECIMALS.DEFAULT };
+    }
 
     // Get token account
     const tokenAddress = await getAssociatedTokenAddress(
@@ -364,7 +464,9 @@ export async function transferToken(
 
     // Get or create the token
     const tokenInfo = await getOrCreateToken(connection, wallet, upperSymbol, network);
-
+    if (!tokenInfo) {
+      throw new Error(`Could not find or create token ${upperSymbol} on ${network}. Cannot perform transfer.`);
+    }
     // Get sender's token account
     const senderTokenAccount = await getAssociatedTokenAddress(
       tokenInfo.mint,
@@ -445,6 +547,11 @@ export async function mintMoreTokens(
     console.log(`Preparing to mint ${amount} ${upperSymbol} tokens`);
     // Get token info (this will create the token if needed)
     const tokenInfo = await getOrCreateToken(connection, wallet, upperSymbol, network);
+    if (!tokenInfo) {
+      // Throw a specific error if token couldn't be found/created
+      throw new Error(`Could not find or create token ${upperSymbol} on ${network}. Creation might have failed. Cannot mint.`);
+    }
+
 
     const tokenAccountAddress = await getAssociatedTokenAddress(
       tokenInfo.mint,

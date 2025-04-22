@@ -3,7 +3,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createLogger } from "@/utils/logger";
 
 const logger = createLogger("NLP-Service");
+let currentNetworkContext: "localnet" | "devnet" | "mainnet" = "localnet";
 
+export function setNetworkContext(network: "localnet" | "devnet" | "mainnet"): void {
+  console.log(`Setting network context to: ${network}`);
+  currentNetworkContext = network;
+}
+
+export function getNetworkContext(): "localnet" | "devnet" | "mainnet" {
+  return currentNetworkContext;
+}
 const parsedCommandCache: Record<string, PaymentInstruction> = {};
 
 // Predefined responses for common queries
@@ -249,6 +258,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap tokens': {
@@ -256,6 +266,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'token swap': {
@@ -263,6 +274,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isSwapRequest: true,
     fromToken: '',
     toToken: '',
+    amount: 1,
     confidence: 1.0,
   },
   'swap sol for usdc': {
@@ -306,6 +318,113 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     recipient: '$4',
     confidence: 1.0,
   },
+  'exchange tokens': {
+    isPayment: false,
+    isSwapRequest: true,
+    fromToken: '',
+    toToken: '',
+    amount: 1,
+    confidence: 1.0,
+  },
+
+  'add liquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'addliquidity': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'add pool': {
+    isPayment: false,
+    isAddLiquidity: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 1,
+    amountB: 1,
+    network: 'localnet',
+    confidence: 0.8,
+  },
+  'create pool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true, // This is the key difference
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'localnet',
+    confidence: 0.9,
+  },
+  'createpool': {
+    isPayment: false,
+    isAddLiquidity: false,
+    isCreatePool: true,
+    tokenA: '',
+    tokenB: '',
+    amountA: 2,
+    amountB: 2,
+    network: 'localnet',
+    confidence: 0.9,
+  },
+  'check pool sol usdc': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'SOL',
+    tokenB: 'USDC',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'check pool usdc sol': {
+    isPayment: false,
+    isPoolLiquidityCheck: true,
+    tokenA: 'USDC',
+    tokenB: 'SOL',
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'unwrap sol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'unwrap wsol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'convert wsol to sol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'close wsol': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'localnet',
+    confidence: 1.0,
+  },
+  'unwrap': {
+    isPayment: false,
+    isUnwrapSol: true,
+    network: 'localnet',
+    confidence: 0.9,
+  }
 };
 
 export interface PaymentInstruction {
@@ -315,6 +434,14 @@ export interface PaymentInstruction {
   isMintRequest?: boolean;
   isTokenCleanup?: boolean;
   isSwapRequest?: boolean;
+  isAddLiquidity?: boolean;
+  isCreatePool?: boolean;
+  isPoolLiquidityCheck?: boolean;
+  isUnwrapSol?: boolean;
+  tokenA?: string;
+  tokenB?: string;
+  amountA?: number;
+  amountB?: number;
   cleanupTarget?: "unknown" | "all" | string[];
   burnTokens?: boolean;
   burnSpecificAmount?: boolean;
@@ -329,6 +456,7 @@ export interface PaymentInstruction {
   amount?: number;
   recipient?: string;
   network?: "localnet" | "devnet" | "mainnet";
+  estimatedReceiveAmount?: number;
   confidence: number;
   raw?: any;
 }
@@ -345,9 +473,23 @@ export async function parsePaymentInstruction(message: string): Promise<PaymentI
 
     const normalizedInput = message.trim().toLowerCase();
 
+    if (normalizedInput.includes("devnet")) {
+      setNetworkContext("devnet")
+    } else if (normalizedInput.includes("mainnet")) {
+      setNetworkContext("mainnet")
+    } else if (normalizedInput.includes("localnet")) {
+      setNetworkContext("localnet")
+    }
+
     if (COMMON_PATTERNS[normalizedInput]) {
       logger.debug('Using predefined pattern match');
-      return COMMON_PATTERNS[normalizedInput];
+
+      const pattern = { ...COMMON_PATTERNS[normalizedInput] }
+
+      if ('network' in pattern) {
+        pattern.network = currentNetworkContext;
+      }
+      return pattern;
     }
 
     if (parsedCommandCache[normalizedInput]) {
@@ -430,14 +572,36 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     11. Network specification (localnet, devnet, or mainnet) - default to localnet if not specified
     12. Mint address - for burning unknown tokens
     13. Is this a token swap request? (true/false)
+    14. Is this a add liquidity request? (true/false)
+    15. Is this a request to fix token names? (true/false)
+    16. Is this a request to burn tokens? (true/false)
+    17. Is this a request to remove unknown tokens? (true/false)
+    18. Is this a request to remove all tokens? (true/false)
+    19. Is this a request to remove specific tokens? (true/false)
+    20. Is this a request to burn specific tokens? (true/false)
+    21. Is this a request to create a pool? (true/false)
+    22. Is this a request to check pool liquidity? (true/false)
+    23. Is this a request to unwrap SOL? (true/false)
+
 
     IMPORTANT: A 'swap' command like "swap 1 SOL for USDC" is NOT a payment. It's a token exchange. Only identify 'isPayment' as true if the user explicitly says 'send', 'pay', 'transfer' funds TO an ADDRESS or recipient name.
 
     for token swap request? (true/false)
-      - If true, set isPayment to false.
-      - Extract from_token, to_token, and amount if present.
-      - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
-      - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+    - If true, set isPayment to false.
+    - Extract from_token, to_token, and amount if present.
+    - Example: "swap 1 SOL for USDC" -> isSwapRequest = true, isPayment = false, fromToken = "SOL", toToken = "USDC", amount = 1
+    - Example: "swap 50 BONK to SOL" -> isSwapRequest = true, isPayment = false, fromToken = "BONK", toToken = "SOL", amount = 50
+
+    For pool liquidity checks:
+    - "check pool liquidity sol usdc" -> isPoolLiquidityCheck = true, tokenA = "SOL", tokenB = "USDC"
+    - "show pool details for usdc/nix" -> isPoolLiquidityCheck = true, tokenA = "USDC", tokenB = "NIX"
+
+    For unwrapping SOL requests:
+    - "unwrap sol" -> isUnwrapSol = true
+    - "convert wsol to sol" -> isUnwrapSol = true
+    - "unwrap my wrapped sol" -> isUnwrapSol = true
+    - "close wsol account" -> isUnwrapSol = true
+    
 
     
     For balance check requests:
@@ -450,6 +614,11 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     - "mint 5 ADI" -> amount = 5, token = "ADI"
     - "mint BONK token" -> amount = 100, token = "BONK" (default amount only when no number specified)
 
+
+    For adding liquidity to pools:
+    - "add liquidity to usdc to sol" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 1, amountB = 1
+    - "add liquidity usdc sol 5 10" -> isAddLiquidity = true, tokenA = "USDC", tokenB = "SOL", amountA = 5 , amountB = 10
+ 
    For token cleanup requests:
     - "cleanup tokens" -> isTokenCleanup = true, cleanupTarget = "unknown" (default to removing unknown tokens)
     - "remove unknown tokens" -> isTokenCleanup = true, cleanupTarget = "unknown"
@@ -497,19 +666,27 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       "isCompleteBalanceCheck": true/false,
       "isMintRequest": true/false,
       "isTokenCleanup": true/false,
-      "isSwapRequest": true/false, // Add this
+      "isSwapRequest": true/false,
+      "isAddLiquidity": true/false,
+      "isCreatePool": true/false,
+      "isPoolLiquidityCheck": true/false,
+      "isUnwrapSol": true/false,
+      "tokenA" : "token symbol" or null,
+      "tokenB" : "token symbol" or null,
+      "amountA": number or null,
+      "amountB": number or null,
       "burnSpecificAmount": true/false,
       "burnAmount": number or null,
       "burnByMintAddress": true/false,
       "mintAddress": "address" or null,
       "listAllTokens": true/false,
-      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", // Added "all"
-      "amount": number or null, // Amount for payment, mint, burn, or swap
-      "token": "SOL" or other token name, or null, // Token for payment, balance, mint, burn
-      "fromToken": "SOL" or other token name, or null, // Add this for swap
-      "toToken": "SOL" or other token name, or null, // Add this for swap
+      "cleanupTarget": "unknown" or ["TOKEN1", "TOKEN2"] or "all", 
+      "amount": number or null, 
+      "token": "SOL" or other token name, or null, 
+      "fromToken": "SOL" or other token name, or null,
+      "toToken": "SOL" or other token name, or null, 
       "network": "localnet" or "devnet" or "mainnet",
-      "recipient": "address" or null, // Recipient for payment
+      "recipient": "address" or null, 
       "confidence": number between 0 and 1
     }
     `;
@@ -536,6 +713,22 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       isMintRequest: !!parsedResult.isMintRequest,
       isTokenCleanup: !!parsedResult.isTokenCleanup,
       isSwapRequest: !!parsedResult.isSwapRequest, // Extract swap flag
+      isAddLiquidity: !!parsedResult.isAddLiquidity,
+      isCreatePool: !!parsedResult.isCreatePool,
+      isPoolLiquidityCheck: !!parsedResult.isPoolLiquidityCheck,
+      isUnwrapSol: !!parsedResult.isUnwrapSol,
+      tokenA: parsedResult.tokenA || undefined,
+      tokenB: parsedResult.tokenB || undefined,
+      amountA: parsedResult.amountA !== null && parsedResult.amountA !== undefined
+        ? (typeof parsedResult.amountA === 'number'
+          ? parsedResult.amountA
+          : parseFloat(String(parsedResult.amountA)))
+        : undefined,
+      amountB: parsedResult.amountB !== null && parsedResult.amountB !== undefined
+        ? (typeof parsedResult.amountB === 'number'
+          ? parsedResult.amountB
+          : parseFloat(String(parsedResult.amountB)))
+        : undefined,
       burnSpecificAmount: !!parsedResult.burnSpecificAmount,
       burnAmount: parsedResult.burnAmount || undefined,
       burnByMintAddress: !!parsedResult.burnByMintAddress,
@@ -551,8 +744,9 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
       token: parsedResult.token || "SOL",
       fromToken: parsedResult.fromToken || undefined, // Extract fromToken
       toToken: parsedResult.toToken || undefined,   // Extract toToken
+      estimatedReceiveAmount: parsedResult.estimatedReceiveAmount || undefined,
       recipient: parsedResult.recipient || undefined,
-      network: parsedResult.network || "localnet",
+      network: parsedResult.network || currentNetworkContext,
       confidence: parsedResult.confidence || 0.8,
       raw: parsedResult
     };
@@ -576,10 +770,59 @@ function parseWithRegex(message: string): PaymentInstruction {
 
   if (lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
     network = "devnet";
+    setNetworkContext("devnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
     network = "mainnet";
+    setNetworkContext("mainnet"); // Update context when explicitly specified
   } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
-    network = "localnet"
+    network = "localnet";
+    setNetworkContext("localnet"); // Update context when explicitly specified
+  }
+
+  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
+  const swapAltRegex = /swap\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+to\s+([a-z]+)/i;
+
+  const swapMatch = lowerMessage.match(swapRegex) || lowerMessage.match(swapAltRegex);
+
+  if (swapMatch) {
+    const amount = parseFloat(swapMatch[1]);
+    const fromToken = swapMatch[2].toUpperCase();
+    const toToken = swapMatch[3].toUpperCase();
+
+    // console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+    let estimatedReceiveAmount = amount;
+    if (fromToken === "USDC" && toToken === "SOL") {
+      estimatedReceiveAmount = amount / 200;
+      console.log(`Value estimate: ${amount} USDC = ${estimatedReceiveAmount} SOL`);
+
+    } else if (fromToken === 'SOL' && toToken === 'USDC') {
+      estimatedReceiveAmount = amount * 200;
+      console.log(`Value estimate: ${amount} SOL = ${estimatedReceiveAmount} USDC`);
+    }
+
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      amount,
+      fromToken,
+      toToken,
+      estimatedReceiveAmount,
+      network,
+      confidence: 0.95
+    };
+  }
+
+  // Also check for general swap keywords
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
 
   if (lowerMessage.includes('mint') ||
@@ -653,8 +896,75 @@ function parseWithRegex(message: string): PaymentInstruction {
     }
   }
 
+
+  const createPoolPattern = /(?:create\s+(?:pool|liquidity)|createpool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const createpoolMatch = lowerMessage.match(createPoolPattern);
+
+  if (createpoolMatch) {
+    return {
+      isPayment: false,
+      isBalanceCheck: false,
+      isCompleteBalanceCheck: false,
+      isMintRequest: false,
+      isTokenCleanup: false,
+      isSwapRequest: false,
+      isAddLiquidity: false,
+      isCreatePool: true,
+      tokenA: createpoolMatch[1],
+      tokenB: createpoolMatch[2],
+      amountA: parseFloat(createpoolMatch[3]) || 2,
+      amountB: parseFloat(createpoolMatch[4]) || 2,
+      network: "localnet",
+      confidence: 0.95
+    };
+  }
+
+  const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const liquidityMatch = lowerMessage.match(addLiquidityRegex);
+  if (liquidityMatch || lowerMessage.includes("addliquidity")) {
+    let tokenA = '', tokenB = '';
+    let amountA = 1, amountB = 1;
+
+    if (liquidityMatch) {
+      tokenA = liquidityMatch[1].toUpperCase();
+      tokenB = liquidityMatch[2].toUpperCase();
+
+      if (liquidityMatch[3]) {
+        amountA = parseFloat(liquidityMatch[3]);
+      }
+
+      if (liquidityMatch[4]) {
+        amountB = parseFloat(liquidityMatch[4]);
+      }
+    }
+
+    return {
+      isPayment: false,
+      isAddLiquidity: true,
+      tokenA,
+      tokenB,
+      amountA,
+      amountB,
+      network,
+      confidence: liquidityMatch ? 0.95 : 0.8
+    };
+  }
+
   if (!hasPaymentKeyword) {
     return { isPayment: false, confidence: 0.9 };
+  }
+
+
+  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+    return {
+      isPayment: false,
+      isSwapRequest: true,
+      fromToken: '',
+      toToken: '',
+      amount: 1,
+      network,
+      confidence: 0.7
+    };
   }
   // Pattern for "send X [TOKEN] to [ADDRESS]"
   // Improved regex that's more flexible with formatting
