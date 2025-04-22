@@ -82,6 +82,8 @@ export function MagneticButton({ children }: { children: React.ReactNode }) {
       onMouseMove={handleMouse}
       onMouseLeave={reset}
       animate={{ x, y }}
+      className="magnetic-button" // Add this class
+      data-cursor-hide="true"
       // Adjusted spring physics for a slightly quicker, more controlled feel
       transition={{ type: "spring", stiffness: 250, damping: 20, mass: 0.1 }} // stiffness: 150 -> 250, damping: 15 -> 20
     >

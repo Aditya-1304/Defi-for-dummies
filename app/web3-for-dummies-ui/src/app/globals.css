@@ -120,3 +120,12 @@
     @apply bg-background text-foreground;
   }
 }
+
+.magnetic-button, button, a, input, select, textarea, .interactive, .card, .badge, [role="button"] {
+  cursor: pointer !important;
+}
+
+/* Hide cursor on main container */
+.cursor-container {
+  cursor: none;
+}

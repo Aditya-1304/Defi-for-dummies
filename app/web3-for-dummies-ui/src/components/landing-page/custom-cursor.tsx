@@ -1,40 +1,3 @@
-// "use client";
-
-// import { motion } from "framer-motion";
-
-// export function CustomCursor({ mousePosition }: { mousePosition: { x: number; y: number } }) {
-//   return (
-//     <>
-//       <motion.div
-//         className="fixed z-50 pointer-events-none h-4 w-4 rounded-full bg-primary/30 mix-blend-difference"
-//         animate={{
-//           x: mousePosition.x - 8,
-//           y: mousePosition.y - 8,
-//         }}
-//         transition={{
-//           type: "spring",
-//           damping: 50,
-//           stiffness: 500,
-//           mass: 0.1,
-//         }}
-//       />
-//       <motion.div
-//         className="fixed z-50 pointer-events-none h-2 w-2 rounded-full bg-primary mix-blend-difference"
-//         animate={{
-//           x: mousePosition.x - 4,
-//           y: mousePosition.y - 4,
-//         }}
-//         transition={{
-//           type: "spring",
-//           damping: 30,
-//           stiffness: 200,
-//           mass: 0.1,
-//         }}
-//       />
-//     </>
-//   );
-// }
-
 "use client";
 
 import { motion } from "framer-motion";
@@ -44,64 +7,93 @@ export function CustomCursor({ mousePosition }: { mousePosition: { x: number; y:
   const [isHoveringInteractive, setIsHoveringInteractive] = useState(false);
 
   useEffect(() => {
-    const handleMouseOver = (e: MouseEvent) => {
-      if (e.target instanceof Element && e.target.closest('button, a, [role="button"], input, select, textarea')) {
-        setIsHoveringInteractive(true);
-      } else {
-        setIsHoveringInteractive(false);
+    // More aggressive approach - use a direct mousemove handler to check what's under the cursor
+    const handleMouseMove = (e: MouseEvent) => {
+      const element = document.elementFromPoint(e.clientX, e.clientY);
+      
+      // Check if we're over any interactive element
+      if (element) {
+        // Check if explicitly marked non-interactive
+        if (element.closest('[data-cursor-hide="false"]')) {
+          setIsHoveringInteractive(false);
+          return;
+        }
+        
+        // Check if any interactive element or explicitly marked
+        const isInteractive = !!element.closest(
+          'button, a, [role="button"], input, select, textarea, .interactive, [data-cursor-hide="true"], .motion-div, .group, ' + 
+          '.card, .badge, svg, .btn, .clickable, .card-content, .magnetic-button'
+        );
+        
+        setIsHoveringInteractive(isInteractive);
       }
     };
-    document.addEventListener('mouseover', handleMouseOver);
+    
+    // Use a throttled version for performance
+    let lastExec = 0;
+    const throttledHandler = (e: MouseEvent) => {
+      const now = Date.now();
+      if (now - lastExec > 40) { // ~25 frames per second check
+        lastExec = now;
+        handleMouseMove(e);
+      }
+    };
+
+    document.addEventListener('mousemove', throttledHandler);
+    
     return () => {
-      document.removeEventListener('mouseover', handleMouseOver);
+      document.removeEventListener('mousemove', throttledHandler);
     };
   }, []);
 
-  // Variants for the outer cursor animation
+  // Animation variants with smoother transitions
   const outerVariants = {
     default: {
       x: mousePosition.x - 12,
       y: mousePosition.y - 12,
       scale: 1,
-      opacity: 0.3, // Default opacity
-      transition: { type: "spring", damping: 30, stiffness: 200, mass: 0.3 }
+      opacity: 0.3,
+      transition: { type: "spring", damping: 60, stiffness: 500, mass: 0.5 }
     },
     hovering: {
-      x: mousePosition.x - 12, // Keep position consistent for fade out
+      x: mousePosition.x - 12,
       y: mousePosition.y - 12,
-      scale: 0, // Scale down to zero
-      opacity: 0, // Fade out completely
-      transition: { duration: 0.1, ease: "linear" } // Faster transition for disappearance
+      scale: 0,
+      opacity: 0,
+      transition: { duration: 0.15, ease: "easeOut" }
     }
   };
 
-  // Variants for the inner cursor animation
   const innerVariants = {
     default: {
       x: mousePosition.x - 3,
       y: mousePosition.y - 3,
-      scale: 1, // Default scale for inner dot
-      transition: { type: "spring", damping: 40, stiffness: 700, mass: 0.1 }
+      scale: 1,
+      opacity: 1,
+      transition: { type: "spring", damping: 70, stiffness: 700, mass: 0.2 }
     },
     hovering: {
-      x: mousePosition.x - 4, // Center slightly larger dot
+      x: mousePosition.x - 4,
       y: mousePosition.y - 4,
-      scale: 1.3, // Slightly increase inner dot scale when outer disappears
-      transition: { type: "spring", damping: 25, stiffness: 500, mass: 0.1 }
+      scale: 0,
+      opacity: 0,
+      transition: { duration: 0.15, ease: "easeOut" }
     }
   };
 
+  const cursorBaseClasses = "fixed z-[9999] pointer-events-none rounded-full bg-blue-500 mix-blend-difference";
+
   return (
     <>
-      {/* Outer Cursor (Trailing) */}
+      {/* Outer Cursor */}
       <motion.div
-        className="fixed z-50 pointer-events-none h-6 w-6 rounded-full bg-primary mix-blend-difference"
+        className={`${cursorBaseClasses} h-6 w-6`}
         variants={outerVariants}
         animate={isHoveringInteractive ? "hovering" : "default"}
       />
-      {/* Inner Cursor (Precise Point) */}
+      {/* Inner Cursor */}
       <motion.div
-        className="fixed z-50 pointer-events-none h-[6px] w-[6px] rounded-full bg-primary mix-blend-difference"
+        className={`${cursorBaseClasses} h-[6px] w-[6px]`}
         variants={innerVariants}
         animate={isHoveringInteractive ? "hovering" : "default"}
       />
