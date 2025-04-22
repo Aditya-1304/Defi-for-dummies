@@ -18,7 +18,7 @@ const ChatPage = () => {
   return (
     <WalletContextProvider>
       <div className="w-full">
-        <Navbar title="Chat" />
+        {/* <Navbar title="Chat" /> */}
         <ChatInterface />
       </div>
     </WalletContextProvider>
