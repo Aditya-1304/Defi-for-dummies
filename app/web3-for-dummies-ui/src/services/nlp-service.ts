@@ -483,10 +483,14 @@ const HELP_RESPONSE = `Hello! I'm your AI agent buddy to automate Solana transac
 - **Specify Network:** Add \`on mainnet\`, \`on localnet\` (defaults to devnet)
 - **Get Help:** \`help\`, \`hello\`
 
-After switching networks, You can refresh the page to get a new chat Or can continue the same chat both will work ^_^
+                                   **Little Note: On Devnet**
+Somethings may go wrong this is just a demo, and not a production ready app.
+Feel free to play around with it, but be careful with your funds.
 Devnet is generally slower than localnet, Request on devnet may take longer to response.
+Be careful with your tokens while adding liquidity, u cant retreive them back (It will be implemented soon in the future)
 It wont fail sometimes it fails to render on UI but u wont lose your fund. Don't worry, always check solana explorer for your transaction status.
 Mainnet is only dummy for now (It doesn't work)
+After switching networks, You can refresh the page to get a new chat Or can continue the same chat both will work ^_^
 ENJOY!!
 `;
 
