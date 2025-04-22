@@ -1752,20 +1752,10 @@ export function ChatInterface() {
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
-      <div className="p-4 border-b border-gray-800 dark:border-gray-800 light:border-gray-200 flex justify-between items-center">
+      <div className="p-3 border-b border-gray-800/60 dark:border-gray-800/60 light:border-gray-200/60 flex justify-between items-center sticky top-0 z-20 bg-gradient-to-br from-gray-950/80 to-gray-900/80 dark:from-gray-950/80 dark:to-gray-900/80 light:from-gray-100/85 light:to-white/85 backdrop-blur-md">
         <h2 className="text-xl font-bold">Web3 Assistant</h2>
         
         <div className="flex items-center gap-2">
-          <Button
-            onClick={navigateToSwap}
-            variant="ghost"
-            size="sm"
-            className="text-purple-400 hover:text-purple-300"
-            title="Swap Tokens"
-          >
-            <ArrowDownUp className="h-4 w-4 mr-1" />
-            <span className="text-sm">Swap</span>
-          </Button>
           <Button 
             onClick={handleNewChat}
             variant="ghost" 
@@ -1797,10 +1787,11 @@ export function ChatInterface() {
             <span className="text-sm">Clear Tokens</span>
           </Button>
           <NetworkSwitcher />
+          <WalletButton />
         </div>
       </div>
       <div className="flex-1 overflow-hidden relative">
-        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
+        <ScrollArea className="h-full py-0 px-4" ref={scrollAreaRef}>
           <AnimatePresence initial={false}>
             {memoizedMessages.map((message) => (
               <MessageComponent 
