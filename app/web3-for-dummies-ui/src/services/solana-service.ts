@@ -775,7 +775,7 @@ export async function executePayment(
   recipient: string,
   amount: number,
   token: string = 'SOL',
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
 ) {
   try {
     console.log(`💸 Executing payment on ${network} network`);
@@ -1073,7 +1073,7 @@ export async function getWalletBalance(
   connection: web3.Connection,
   wallet: any,
   token: string = 'SOL',
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
 ) {
   try {
     if (!wallet.publicKey) throw new Error("wallet not connected");
@@ -1146,7 +1146,7 @@ export async function mintTestTokens(
   wallet: any,
   token: string = 'USDC',
   amount: number = 100,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
 ) {
   try {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
@@ -1545,7 +1545,7 @@ async function mintMoreCustomTokens(
 export async function getAllWalletBalances(
   connection: web3.Connection,
   wallet: any,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
   options: { initialOnly?: boolean } = {}
 ) {
   if (!wallet || !wallet.publicKey) {
@@ -1631,7 +1631,7 @@ export async function getAllWalletBalances(
 export async function getTokenBalancesOnly(
   connection: web3.Connection,
   wallet: any,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ) {
   try {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
@@ -1735,7 +1735,7 @@ export async function getTokenBalancesOnly(
 export async function fetchUserTokens(
   connection: web3.Connection,
   wallet: any,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
   options = { hideUnknown: false }
 ): Promise<{
   mint: string;
@@ -2097,7 +2097,7 @@ export async function executePoolSwap(
   toTokenSymbol: string,
   amountIn: number,
   slippageBps: number = 50,
-  network: "localnet" | "devnet" | "mainnet" = "localnet",
+  network: "localnet" | "devnet" | "mainnet" = "devnet",
 ): Promise<{
   success: boolean;
   message: string;
@@ -3002,7 +3002,7 @@ export async function createLiquidityPool(
   tokenBSymbol: string,
   initialAmountA: number, // These are NOT used by initializePool, only for ratio check
   initialAmountB: number, // These are NOT used by initializePool, only for ratio check
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{ success: boolean; message: string; signature?: string; explorerUrl?: string; error?: any }> {
   try {
     if (!wallet.publicKey || !wallet.signTransaction) {
@@ -3550,7 +3550,7 @@ export async function addLiquidityToPool(
   tokenBSymbol: string,
   liquidityAmountA: number, // Removed default values, should be provided by caller
   liquidityAmountB: number, // Removed default values, should be provided by caller
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{
   success: boolean;
   message: string;
@@ -3926,7 +3926,7 @@ export async function wrapSol(
   connection: Connection,
   wallet: WalletContextState,
   amount: number,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{
   success: boolean;
   message: string;
@@ -4061,7 +4061,7 @@ export async function getPoolExactRatio(
   connection: Connection,
   tokenA: string,
   tokenB: string,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{ tokenARatio: number, tokenBRatio: number, exactRatio: number, humanReadableRatio: string }> {
   try {
     const program = getProgram(connection, null);
@@ -4274,7 +4274,7 @@ export async function getPoolLiquidity(
   tokenASymbol: string,
   tokenBSymbol: string,
   wallet: WalletContextState,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{
   success: boolean;
   message: string;
@@ -4460,7 +4460,7 @@ export async function getPoolLiquidity(
 export async function unwrapSol(
   connection: Connection,
   wallet: any,
-  network: "localnet" | "devnet" | "mainnet" = "localnet"
+  network: "localnet" | "devnet" | "mainnet" = "devnet"
 ): Promise<{
   success: boolean,
   message: string,

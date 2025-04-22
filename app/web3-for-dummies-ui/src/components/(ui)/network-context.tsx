@@ -11,25 +11,35 @@ interface NetworkContextType {
 }
 
 const NetworkContext = createContext<NetworkContextType>({
-  network: 'localnet',
+  network: 'devnet',
   setNetwork: () => {},
 });
 
 export function NetworkProvider({ children }: { children: ReactNode }) {
   // Initialize from URL or localStorage
-  const [network, setNetworkState] = useState<NetworkType>('localnet');
+  const [network, setNetworkState] = useState<NetworkType>('devnet');
   
   // Initialize on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const networkParam = params.get('network');
-      
-      if (networkParam === 'devnet' || networkParam === 'mainnet') {
-        setNetworkState(networkParam as NetworkType);
-      } else {
-        // Default to localnet
-        setNetworkState('localnet');
+      const storedNetwork = localStorage.getItem('network') as NetworkType | null;
+
+      let initialNetwork: NetworkType = 'devnet'; // Changed default
+
+      if (networkParam === 'localnet' || networkParam === 'devnet' || networkParam === 'mainnet') {
+        initialNetwork = networkParam;
+      } else if (storedNetwork === 'localnet' || storedNetwork === 'devnet' || storedNetwork === 'mainnet') {
+        initialNetwork = storedNetwork;
+      }
+
+      setNetworkState(initialNetwork);
+      // Update URL if it doesn't match the determined initial network
+      if (networkParam !== initialNetwork) {
+         const url = new URL(window.location.href);
+         url.searchParams.set('network', initialNetwork);
+         window.history.replaceState({}, '', url.toString()); // Use replaceState to avoid polluting history on load
       }
     }
   }, []);

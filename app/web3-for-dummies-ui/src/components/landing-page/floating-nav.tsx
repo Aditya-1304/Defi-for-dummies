@@ -141,28 +141,49 @@ import { motion, useScroll, useTransform } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
-// Remove useState and useEffect for now if not strictly needed for the blur effect itself
-// import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export function FloatingNav() {
   const { scrollYProgress } = useScroll();
-  const opacity = useTransform(scrollYProgress, [0, 0.05, 0.1], [0, 0, 1]);
+  // Only use y transform for the slide-in effect
   const y = useTransform(scrollYProgress, [0, 0.1], [-100, 0]);
 
-  // Use a fixed, more transparent background and consistent blur for testing
-  const fixedBgOpacity = "bg-background/60"; // Or try bg-black/50, bg-white/50 depending on your theme
-  const fixedBlurAmount = "backdrop-blur-lg"; // Or backdrop-blur-md
+  // Use state to control visibility based on scroll threshold
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    // Subscribe to scroll progress changes
+    const unsubscribe = scrollYProgress.on("change", (latest) => {
+      // Set visibility based on whether scroll progress is past a threshold (e.g., 0.05)
+      setIsVisible(latest > 0.05);
+    });
+
+    // Cleanup subscription on component unmount
+    return () => unsubscribe();
+  }, [scrollYProgress]); // Re-run effect if scrollYProgress changes
+
+  // Define consistent background and blur classes
+  // Use a specific color with transparency, e.g., black/70 or background/70
+  const backgroundClasses = "bg-background/70 backdrop-blur-sm"; // Adjust opacity and blur as needed
+
+  // Conditionally render the component or apply visibility styles
+  if (!isVisible) {
+    return null; // Or return a motion.div with initial y and opacity 0 if you prefer a fade-out
+  }
 
   return (
     <motion.div
-      style={{ opacity, y }}
-      // Ensure high z-index
-      className="fixed top-4 left-1/2 z-[100] -translate-x-1/2" // Increased z-index just in case
+      // Apply only the y transform for animation
+      style={{ y }}
+      className="fixed top-4 left-1/2 z-[100] -translate-x-1/2"
+      // Animate the y position
+      initial={{ y: -100 }} // Start off-screen
+      animate={{ y: 0 }}    // Animate to final position
       transition={{ duration: 0.3, ease: "easeInOut" }}
     >
-      {/* Apply fixed transparency and blur */}
+      {/* Inner div always has the blur and background styles */}
       <div
-        className={`flex items-center gap-4 rounded-full border border-blue-500/30 ${fixedBgOpacity} px-5 py-2 shadow-lg ${fixedBlurAmount}`}
+        className={`flex items-center gap-4 rounded-full border border-blue-500/30 ${backgroundClasses} px-5 py-2 shadow-lg`}
       >
         <Sparkles className="h-5 w-5 text-blue-500" />
         <nav className="flex items-center gap-5">

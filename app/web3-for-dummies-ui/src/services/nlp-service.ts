@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createLogger } from "@/utils/logger";
 
 const logger = createLogger("NLP-Service");
-let currentNetworkContext: "localnet" | "devnet" | "mainnet" = "localnet";
+let currentNetworkContext: "localnet" | "devnet" | "mainnet" = "devnet";
 
 export function setNetworkContext(network: "localnet" | "devnet" | "mainnet"): void {
   console.log(`Setting network context to: ${network}`);
@@ -22,7 +22,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show balance': {
@@ -30,7 +30,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show all balances': {
@@ -38,7 +38,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'wallet balance': {
@@ -46,7 +46,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: true,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'sol balance': {
@@ -54,7 +54,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: true,
     isCompleteBalanceCheck: false,
     token: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint 10 usdc': {
@@ -63,7 +63,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 10,
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint usdc': {
@@ -72,7 +72,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 100,
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'mint 50 usdc': {
@@ -81,7 +81,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: true,
     amount: 50,  // This is explicitly 50, not 100
     token: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup tokens': {
@@ -90,7 +90,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove unknown tokens': {
@@ -99,7 +99,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup unknown tokens': {
@@ -108,7 +108,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: "unknown",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'cleanup adi tokens': {
@@ -117,7 +117,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove adi tokens': {
@@ -126,7 +126,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isMintRequest: false,
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
 
@@ -137,7 +137,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
     burnTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn all adi tokens': {
@@ -147,7 +147,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isTokenCleanup: true,
     cleanupTarget: ["ADI"],
     burnTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 20 nix': {
@@ -158,7 +158,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 20,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 10 nix': {
@@ -169,7 +169,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 10,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'burn 10 nix tokens': {
@@ -180,25 +180,25 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     burnSpecificAmount: true,
     burnAmount: 10,
     token: 'NIX',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix token names': {
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix tokens name': {  // Add this variation
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'fix tokens': {  // Add this shorter variation
     isPayment: false,
     isFixTokenNames: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'delete all tokens': {
@@ -206,7 +206,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'clean all tokens': {
@@ -214,7 +214,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'remove all tokens': {
@@ -222,35 +222,35 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isBalanceCheck: false,
     isTokenCleanup: true,
     cleanupTarget: "all",
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list all': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list all tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'show all tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'list tokens': {
     isPayment: false,
     isBalanceCheck: false,
     listAllTokens: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'swap': {
@@ -334,7 +334,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     tokenB: '',
     amountA: 1,
     amountB: 1,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'addliquidity': {
@@ -344,7 +344,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     tokenB: '',
     amountA: 1,
     amountB: 1,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'add pool': {
@@ -354,7 +354,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     tokenB: '',
     amountA: 1,
     amountB: 1,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 0.8,
   },
   'create pool': {
@@ -365,7 +365,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     tokenB: '',
     amountA: 2,
     amountB: 2,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 0.9,
   },
   'createpool': {
@@ -376,7 +376,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     tokenB: '',
     amountA: 2,
     amountB: 2,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 0.9,
   },
   'check pool sol usdc': {
@@ -384,7 +384,7 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isPoolLiquidityCheck: true,
     tokenA: 'SOL',
     tokenB: 'USDC',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'check pool usdc sol': {
@@ -392,37 +392,37 @@ const COMMON_PATTERNS: Record<string, PaymentInstruction> = {
     isPoolLiquidityCheck: true,
     tokenA: 'USDC',
     tokenB: 'SOL',
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'unwrap sol': {
     isPayment: false,
     isUnwrapSol: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'unwrap wsol': {
     isPayment: false,
     isUnwrapSol: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'convert wsol to sol': {
     isPayment: false,
     isUnwrapSol: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'close wsol': {
     isPayment: false,
     isUnwrapSol: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 1.0,
   },
   'unwrap': {
     isPayment: false,
     isUnwrapSol: true,
-    network: 'localnet',
+    network: 'devnet',
     confidence: 0.9,
   }
 };
@@ -438,6 +438,8 @@ export interface PaymentInstruction {
   isCreatePool?: boolean;
   isPoolLiquidityCheck?: boolean;
   isUnwrapSol?: boolean;
+  isHelpRequest?: boolean;
+  responseText?: string;
   tokenA?: string;
   tokenB?: string;
   amountA?: number;
@@ -457,6 +459,8 @@ export interface PaymentInstruction {
   recipient?: string;
   network?: "localnet" | "devnet" | "mainnet";
   estimatedReceiveAmount?: number;
+  originalMessage?: string;
+  needsConfirmation?: boolean;
   confidence: number;
   raw?: any;
 }
@@ -464,73 +468,178 @@ export interface PaymentInstruction {
 // Initialize Gemini API
 // Replace with your actual API key
 const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
+const HELP_RESPONSE = `Hello! I'm your AI agent buddy to automate Solana transactions. Here's what I can do:
+- **Balance checks:** \`balance\`, \`list all tokens\`
+- **Minting test tokens:** \`mint 10 USDC\`
+- **Swapping tokens:** \`swap 1 SOL for USDC\`
+- **Creating liquidity pools:** \`create pool SOL USDC 1 200\`
+- **Adding liquidity:** \`add liquidity SOL USDC 1 200\`
+- **Checking pool liquidity:** \`check pool SOL USDC\`, \`show pool SOL USDC\`
+- **Sending payments:** \`send 0.5 SOL to ADDRESS\`
+- **Burning tokens:** \`burn 5 NIX\`, \`burn 10 from mint ADDRESS\`
+- **Cleaning up tokens:** \`cleanup unknown tokens\`, \`cleanup all tokens\`
+- **Unwrapping SOL:** \`unwrap sol\`
+- **Fixing token names:** \`fix token names\`
+- **Specify Network:** Add \`on mainnet\`, \`on localnet\` (defaults to devnet)
+- **Get Help:** \`help\`, \`hello\``;
 
 // Create a safe instance of the API
 const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
+// export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
+//   try {
+
+//     const normalizedInput = message.trim().toLowerCase();
+
+//     if (normalizedInput.includes("devnet")) {
+//       setNetworkContext("devnet")
+//     } else if (normalizedInput.includes("mainnet")) {
+//       setNetworkContext("mainnet")
+//     } else if (normalizedInput.includes("localnet")) {
+//       setNetworkContext("localnet")
+//     }
+
+//     if (COMMON_PATTERNS[normalizedInput]) {
+//       logger.debug('Using predefined pattern match');
+
+//       const pattern = { ...COMMON_PATTERNS[normalizedInput] }
+
+//       if ('network' in pattern) {
+//         pattern.network = currentNetworkContext;
+//       }
+//       return pattern;
+//     }
+
+//     if (parsedCommandCache[normalizedInput]) {
+//       logger.debug('Using cached parsing result');
+//       return parsedCommandCache[normalizedInput];
+//     }
+
+//     if (lowerMessage === "hello" || lowerMessage === "help") {
+//       logger.info(`Help request detected for: ${lowerMessage}`);
+//       const helpInstruction: PaymentInstruction = {
+//         isPayment: false,
+//         isHelpRequest: true,
+//         responseText: HELP_RESPONSE,
+//         network: currentNetworkContext,
+//         confidence: 1.0,
+//       };
+//       parsedCommandCache[cacheKey] = helpInstruction;
+//       return helpInstruction;
+//     }
+
+//     let result: PaymentInstruction;
+//     // Only try Gemini if we have an API key
+//     if (genAI) {
+//       logger.debug("🤖 Attempting to parse with Gemini AI...");
+//       const geminiResult = await parseWithGemini(message);
+//       if (geminiResult) {
+//         logger.debug("✅ Successfully parsed with Gemini AI", geminiResult);
+//         result = geminiResult;
+
+//         if (geminiResult.confidence > 0.7) {
+//           parsedCommandCache[normalizedInput] = geminiResult;
+//         }
+
+//         return result;
+//       } else {
+//         logger.debug("⚠️ Gemini parsing returned null, falling back to regex");
+//         result = parseWithRegex(message);
+
+//         if (result.confidence > 0.8) {
+//           parsedCommandCache[normalizedInput] = result;
+//         }
+//       }
+//     } else {
+//       console.warn("⚠️ No Gemini API key found, using regex parser only");
+//     }
+
+//     // Fallback to regex-based parsing
+//     console.log("📝 Using regex-based parsing as fallback");
+//     return parseWithRegex(message);
+//   } catch (error) {
+//     console.error("❌ Error in parsePaymentInstruction:", error);
+//     console.log("📝 Falling back to regex parser due to error");
+//     return parseWithRegex(message);
+//   }
+// }
 export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
-  try {
+  const lowerMessage = message.trim().toLowerCase();
+  const cacheKey = `${lowerMessage}_${currentNetworkContext}`; // Include network in cache key
 
-    const normalizedInput = message.trim().toLowerCase();
-
-    if (normalizedInput.includes("devnet")) {
-      setNetworkContext("devnet")
-    } else if (normalizedInput.includes("mainnet")) {
-      setNetworkContext("mainnet")
-    } else if (normalizedInput.includes("localnet")) {
-      setNetworkContext("localnet")
-    }
-
-    if (COMMON_PATTERNS[normalizedInput]) {
-      logger.debug('Using predefined pattern match');
-
-      const pattern = { ...COMMON_PATTERNS[normalizedInput] }
-
-      if ('network' in pattern) {
-        pattern.network = currentNetworkContext;
-      }
-      return pattern;
-    }
-
-    if (parsedCommandCache[normalizedInput]) {
-      logger.debug('Using cached parsing result');
-      return parsedCommandCache[normalizedInput];
-    }
-
-    let result: PaymentInstruction;
-    // Only try Gemini if we have an API key
-    if (genAI) {
-      logger.debug("🤖 Attempting to parse with Gemini AI...");
-      const geminiResult = await parseWithGemini(message);
-      if (geminiResult) {
-        logger.debug("✅ Successfully parsed with Gemini AI", geminiResult);
-        result = geminiResult;
-
-        if (geminiResult.confidence > 0.7) {
-          parsedCommandCache[normalizedInput] = geminiResult;
-        }
-
-        return result;
-      } else {
-        logger.debug("⚠️ Gemini parsing returned null, falling back to regex");
-        result = parseWithRegex(message);
-
-        if (result.confidence > 0.8) {
-          parsedCommandCache[normalizedInput] = result;
-        }
-      }
-    } else {
-      console.warn("⚠️ No Gemini API key found, using regex parser only");
-    }
-
-    // Fallback to regex-based parsing
-    console.log("📝 Using regex-based parsing as fallback");
-    return parseWithRegex(message);
-  } catch (error) {
-    console.error("❌ Error in parsePaymentInstruction:", error);
-    console.log("📝 Falling back to regex parser due to error");
-    return parseWithRegex(message);
+  // 1. Check Cache
+  if (parsedCommandCache[cacheKey]) {
+    logger.debug(`Cache hit for: ${cacheKey}`);
+    return parsedCommandCache[cacheKey];
   }
+
+  // 2. Check for Help Keywords
+  if (lowerMessage === "hello" || lowerMessage === "help") {
+    logger.info(`Help request detected for: ${lowerMessage}`);
+    const helpInstruction: PaymentInstruction = {
+      isPayment: false,
+      isHelpRequest: true,
+      responseText: HELP_RESPONSE,
+      network: currentNetworkContext,
+      confidence: 1.0,
+      originalMessage: message,
+    };
+    parsedCommandCache[cacheKey] = helpInstruction; // Cache the help response
+    return helpInstruction;
+  }
+
+  // 3. Check Common Patterns
+  if (COMMON_PATTERNS[lowerMessage]) {
+    logger.info(`Common pattern matched: ${lowerMessage}`);
+    const instruction = {
+      ...COMMON_PATTERNS[lowerMessage],
+      network: COMMON_PATTERNS[lowerMessage].network || currentNetworkContext, // Ensure network context
+      originalMessage: message,
+    };
+    parsedCommandCache[cacheKey] = instruction;
+    return instruction;
+  }
+
+  // 4. Try Parsing with AI (if available and key exists)
+  let instruction: PaymentInstruction | null = null;
+  if (genAI) {
+    logger.info(`Parsing with AI: ${message}`);
+    instruction = await parseWithGemini(message);
+  }
+
+  // 5. Fallback to Regex if AI failed, had low confidence, or wasn't used
+  if (!instruction || instruction.confidence < 0.7) {
+    if (instruction) { // Log if AI result was discarded due to low confidence
+      logger.warn(`AI parsing confidence low (${instruction.confidence}), falling back to regex for: ${message}`);
+    } else if (genAI) { // Log if AI parsing failed entirely
+      logger.warn(`AI parsing failed, falling back to regex for: ${message}`);
+    } else { // Log if AI wasn't used (no API key)
+      logger.info(`Parsing with Regex (no AI key): ${message}`);
+    }
+    instruction = parseWithRegex(message); // Use regex parser
+  } else {
+    logger.info(`Using AI result (confidence: ${instruction.confidence}) for: ${message}`);
+  }
+
+  // 6. Final Adjustments (Network, Confirmation, Original Message)
+  // Ensure network context is set if missing from parsing
+  if (!instruction.network) {
+    instruction.network = currentNetworkContext;
+  }
+  instruction.originalMessage = message; // Store original message
+
+  // Add simple confirmation logic (example)
+  if (instruction.isPayment && instruction.amount && instruction.amount > 1 && instruction.token === 'SOL') {
+    instruction.needsConfirmation = true;
+  }
+  if (instruction.isSwapRequest && instruction.amount && instruction.amount > 1 && instruction.fromToken === 'SOL') {
+    instruction.needsConfirmation = true;
+  }
+
+  // 7. Cache and Return
+  parsedCommandCache[cacheKey] = instruction; // Cache the final result
+  logger.info("Final Parsed Instruction:", instruction);
+  return instruction;
 }
 
 async function parseWithGemini(message: string): Promise<PaymentInstruction | null> {
@@ -761,7 +870,7 @@ function parseWithRegex(message: string): PaymentInstruction {
   // Convert message to lowercase for case-insensitive matching
   const lowerMessage = message.toLowerCase();
 
-  let network: "localnet" | "devnet" | "mainnet" = "localnet";
+  let network: "localnet" | "devnet" | "mainnet" = "devnet";
 
   const burnCommand = detectBurnCommand(message);
   if (burnCommand) {

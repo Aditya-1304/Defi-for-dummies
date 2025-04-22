@@ -130,7 +130,7 @@ export function ChatInterface() {
   const wallet = useWallet()
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const networkOptions = ["localnet", "devnet", "mainnet"] as const
-  const [network, setNetwork] = useState<"localnet" | "devnet" | "mainnet">(networkOptions[0])
+  const [network, setNetwork] = useState<"localnet" | "devnet" | "mainnet">(networkOptions[1])
 
   const [isLoading, setIsLoading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -168,7 +168,7 @@ export function ChatInterface() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const networkParam = params.get("network")
-    const currentNetwork = networkParam === "devnet" || networkParam === "mainnet" ? networkParam : "localnet"
+    const currentNetwork = networkParam === "localnet" || networkParam === "mainnet" ? networkParam : "devnet"
 
     setNetwork(currentNetwork as "localnet" | "devnet" | "mainnet")
     setNetworkContext(currentNetwork as "localnet" | "devnet" | "mainnet")
@@ -452,18 +452,31 @@ export function ChatInterface() {
 
       const params = new URLSearchParams(window.location.search);
       const urlNetwork = params.get("network");
-      const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+      const effectiveNetwork = urlNetwork === "localnet" || urlNetwork === "mainnet" ? urlNetwork : "devnet";
 
       if (parsedInstruction.network) {
         setNetworkContext(parsedInstruction.network);
       } else {
         setNetworkContext(effectiveNetwork as "localnet" | "devnet" | "mainnet");
       }
+      
 
       if (parsedInstruction.isUnwrapSol) {
         parsedInstruction.network = getNetworkContext();
         console.log("Using network context for unwrap:", parsedInstruction.network);
       }
+      if (parsedInstruction.isHelpRequest && parsedInstruction.responseText) {
+        addAIMessage(parsedInstruction.responseText);
+        setIsLoading(false);
+        return; // Stop further processing
+      }
+      if (parsedInstruction.isHelpRequest && parsedInstruction.responseText) {
+        addAIMessage(parsedInstruction.responseText);
+        setIsLoading(false);
+        return; // Stop further processing
+      }
+
+      
 
       if (parsedInstruction.isBalanceCheck || parsedInstruction.isPayment || parsedInstruction.isMintRequest || parsedInstruction.isSwapRequest ) {
         const userInputLower = userInput.toLowerCase();
@@ -585,14 +598,13 @@ export function ChatInterface() {
           if (!quote.success) {
             // Check if the reason for failure is a missing pool
             if (quote.needsPoolCreation) {
-              // *** NEW LOGIC: Ask user to create pool ***
               addAIMessage(
                 `🤔 Pool not found for ${fromTokenSymbol}/${toTokenSymbol} on ${effectiveNetwork}.\n\n` +
                 `To swap these tokens, a liquidity pool needs to be created first. You can create one using a command like:\n` +
                 `\`create pool ${fromTokenSymbol} ${toTokenSymbol} <amount_${fromTokenSymbol}> <amount_${toTokenSymbol}>\`\n\n` +
                 `**Important:** When creating, provide initial amounts that respect the value ratio (e.g., for SOL/SPL pools on local/devnet, aim for 1 SOL ≈ 200 SPL value).`
               );
-              // *** END OF NEW LOGIC ***
+              
             } else {
               // Handle other quote errors (e.g., token not found, insufficient liquidity in pool)
               addAIMessage(`❌ ${quote.message || "Could not get a price quote for this swap."}`);
@@ -1753,8 +1765,8 @@ export function ChatInterface() {
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
       <div className="p-3 border-b border-gray-800/60 dark:border-gray-800/60 light:border-gray-200/60 flex justify-between items-center sticky top-0 z-20 bg-gradient-to-br from-gray-950/80 to-gray-900/80 dark:from-gray-950/80 dark:to-gray-900/80 light:from-gray-100/85 light:to-white/85 backdrop-blur-md">
-        <h2 className="text-xl font-bold">Web3 Assistant</h2>
-        
+      <a href="/" className="text-xl font-bold hover:text-purple-400 transition-colors">Web3 Buddy</a>
+                
         <div className="flex items-center gap-2">
           <Button 
             onClick={handleNewChat}
@@ -1791,7 +1803,7 @@ export function ChatInterface() {
         </div>
       </div>
       <div className="flex-1 overflow-hidden relative">
-        <ScrollArea className="h-full py-0 px-4" ref={scrollAreaRef}>
+        <ScrollArea className="h-full py-1 px-4" ref={scrollAreaRef}>
           <AnimatePresence initial={false}>
             {memoizedMessages.map((message) => (
               <MessageComponent 
