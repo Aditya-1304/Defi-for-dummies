@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { motion, AnimatePresence } from "framer-motion"
 import { Ban, DatabaseZap, Send, WalletMinimal } from "lucide-react"
 import { useConnection, useWallet } from "@solana/wallet-adapter-react"
-import { parsePaymentInstruction } from "@/services/nlp-service"
+import { getNetworkContext, parsePaymentInstruction, setNetworkContext } from "@/services/nlp-service"
 import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio, getPoolLiquidity, unwrapSol } from "@/services/solana-service"
 import * as React from "react"
 import type { JSX } from 'react'
@@ -171,6 +171,8 @@ export function ChatInterface() {
     const currentNetwork = networkParam === "devnet" || networkParam === "mainnet" ? networkParam : "localnet"
 
     setNetwork(currentNetwork as "localnet" | "devnet" | "mainnet")
+    setNetworkContext(currentNetwork as "localnet" | "devnet" | "mainnet")
+
 
     if (typeof window !== 'undefined') {
       const storedMessages = localStorage.getItem(`chat_messages_${currentNetwork}`)
@@ -448,6 +450,21 @@ export function ChatInterface() {
 
       console.log("Parsed instruction:", parsedInstruction)
 
+      const params = new URLSearchParams(window.location.search);
+      const urlNetwork = params.get("network");
+      const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+
+      if (parsedInstruction.network) {
+        setNetworkContext(parsedInstruction.network);
+      } else {
+        setNetworkContext(effectiveNetwork as "localnet" | "devnet" | "mainnet");
+      }
+
+      if (parsedInstruction.isUnwrapSol) {
+        parsedInstruction.network = getNetworkContext();
+        console.log("Using network context for unwrap:", parsedInstruction.network);
+      }
+
       if (parsedInstruction.isBalanceCheck || parsedInstruction.isPayment || parsedInstruction.isMintRequest || parsedInstruction.isSwapRequest ) {
         const userInputLower = userInput.toLowerCase();
         let requestedNetwork: "localnet" | "devnet" | "mainnet" | null = null;
@@ -466,9 +483,9 @@ export function ChatInterface() {
         }
       }
 
-      const params = new URLSearchParams(window.location.search);
-      const urlNetwork = params.get("network");
-      const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
+      // const params = new URLSearchParams(window.location.search);
+      // const urlNetwork = params.get("network");
+      // const effectiveNetwork = urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet";
 
       
       
@@ -835,11 +852,17 @@ export function ChatInterface() {
       if (!wallet.connected || !wallet.publicKey) {
         addAIMessage("Please connect your wallet to unwrap SOL.");
       } else {
+        // const networkToUse = getNetworkContext()
+        const params = new URLSearchParams(window.location.search);
+        const urlNetwork = params.get("network");
+        const activeNetwork = network || (urlNetwork === "devnet" || urlNetwork === "mainnet" ? urlNetwork : "localnet");
+        
         addAIMessage(`Unwrapping your wSOL to native SOL on ${effectiveNetwork}...`);
         try {
           const result = await unwrapSol(
             connection,
-            wallet
+            wallet,
+            activeNetwork,
           );
           
           if (result.success) {
