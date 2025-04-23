@@ -468,25 +468,40 @@ export interface PaymentInstruction {
 // Initialize Gemini API
 // Replace with your actual API key
 const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
-const HELP_RESPONSE = `Hello! I'm your AI agent buddy to automate Solana transactions. Here's what I can do:
+const HELP_RESPONSE = `
+Hello! I'm your AI agent buddy, here to help automate Solana transactions. Here's what I can do:
+
+**Core Actions:**
 - **Balance checks:** \`balance\`, \`list all tokens\`
 - **Minting test tokens:** \`mint 10 USDC\`
 - **Swapping tokens:** \`swap 1 SOL for USDC\`
-- **Creating liquidity pools:** \`create pool SOL USDC 1 200\`
-- **Adding liquidity:** \`add liquidity SOL USDC 1 200\`
-- **Checking pool liquidity:** \`check pool SOL USDC\`, \`show pool SOL USDC\`
 - **Sending payments:** \`send 0.5 SOL to ADDRESS\`
 - **Burning tokens:** \`burn 5 NIX\`, \`burn 10 from mint ADDRESS\`
 - **Cleaning up tokens:** \`cleanup unknown tokens\`, \`cleanup all tokens\`
 - **Unwrapping SOL:** \`unwrap sol\`
 - **Fixing token names:** \`fix token names\`
-- **Specify Network:** Add \`on mainnet\`, \`on localnet\` (defaults to devnet)
+
+**Liquidity Pool Actions:**
+- **Creating liquidity pools:** \`create pool SOL USDC 1 200\`
+- **Adding liquidity:** \`add liquidity SOL USDC 1 200\`
+- **Checking pool liquidity:** \`check pool SOL USDC\`, \`show pool SOL USDC\`
+
+**Options & Help:**
+- **Specify Network:** Add \`on mainnet\` or \`on localnet\` (defaults to devnet)
 - **Get Help:** \`help\`, \`hello\`
 
-After switching networks, You can refresh the page to get a new chat Or can continue the same chat both will work ^_^
-Devnet is generally slower than localnet, Request on devnet may take longer to response.
-It wont fail sometimes it fails to render on UI but u wont lose your fund. Don't worry, always check solana explorer for your transaction status.
-Mainnet is only dummy for now (It doesn't work)
+---
+
+**A Little Note About Devnet:**
+
+*   Some things may go wrong; this is just a demo and not a production-ready app.
+*   Feel free to play around with it, but please be careful with your funds.
+*   Devnet is generally slower than localnet; requests on Devnet may take longer to process.
+*   Be careful with your tokens when adding liquidity; you cannot retrieve them back currently (this feature will be implemented in the future).
+*   Transactions might sometimes fail to render correctly in the UI, but you won't lose your funds. Don't worry; always check the Solana Explorer for your transaction status.
+*   Mainnet functionality is currently a placeholder (it doesn't work yet).
+*   After switching networks, you can refresh the page to start a new chat or continue the same chat – both will work! ^_^
+
 ENJOY!!
 `;
 
