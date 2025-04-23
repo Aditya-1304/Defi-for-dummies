@@ -1808,7 +1808,7 @@ export function ChatInterface() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
       <div className="p-2 sm:p-3 border-b border-gray-800/60 dark:border-gray-800/60 light:border-gray-200/60 flex flex-wrap justify-between items-center gap-x-4 gap-y-2 sticky top-0 z-20 bg-gradient-to-br from-gray-950/80 to-gray-900/80 dark:from-gray-950/80 dark:to-gray-900/80 light:from-gray-100/85 light:to-white/85 backdrop-blur-md">
         <a href="/" className="text-xl font-bold hover:text-purple-400 transition-colors flex-shrink-0">Defi-Buddy</a>
                 
