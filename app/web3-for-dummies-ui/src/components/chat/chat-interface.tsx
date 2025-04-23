@@ -1764,16 +1764,25 @@ export function ChatInterface() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
-      <div className="p-3 border-b border-gray-800/60 dark:border-gray-800/60 light:border-gray-200/60 flex justify-between items-center sticky top-0 z-20 bg-gradient-to-br from-gray-950/80 to-gray-900/80 dark:from-gray-950/80 dark:to-gray-900/80 light:from-gray-100/85 light:to-white/85 backdrop-blur-md">
-      <a href="/" className="text-xl font-bold hover:text-purple-400 transition-colors">Defi-Buddy</a>
+    <div className="flex flex-col min-h-screen bg-gradient-to-br from-gray-950 to-gray-900 dark:from-gray-950 dark:to-gray-900 light:from-gray-100 light:to-white text-gray-100 dark:text-gray-100 light:text-gray-800">
+      <div className="p-2 sm:p-3 border-b border-gray-800/60 dark:border-gray-800/60 light:border-gray-200/60 flex flex-wrap justify-between items-center gap-x-4 gap-y-2 sticky top-0 z-20 bg-gradient-to-br from-gray-950/80 to-gray-900/80 dark:from-gray-950/80 dark:to-gray-900/80 light:from-gray-100/85 light:to-white/85 backdrop-blur-md">
+        <a href="/" className="text-xl font-bold hover:text-purple-400 transition-colors flex-shrink-0">Defi-Buddy</a>
                 
-        <div className="flex items-center gap-2">
-          <Button 
+        <div className="flex items-center flex-shrink-0 gap-1"> {/* Reduced default gap */}
+        <Button 
             onClick={handleNewChat}
             variant="ghost" 
-            size="sm"
-            className="text-gray-400 hover:text-white"
+            size="icon" 
+            className="text-gray-400 hover:text-white sm:hidden" 
+            title="New Chat"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+           <Button 
+            onClick={handleNewChat}
+            variant="ghost" 
+            size="sm" 
+            className="text-gray-400 hover:text-white hidden sm:inline-flex sm:gap-2" // Added sm:gap-2 here
             title="New Chat"
           >
             <Trash2 className="h-4 w-4 mr-1" />
@@ -1782,8 +1791,17 @@ export function ChatInterface() {
           <Button 
             onClick={clearTokenCache}
             variant="ghost" 
-            size="sm"
-            className="text-red-400 hover:text-red-300"
+            size="icon" // Use icon size by default
+            className="text-red-400 hover:text-red-300 sm:hidden" // Show only icon on small screens
+            title="Clear Token Cache"
+          >
+            <DatabaseZap className="h-4 w-4" />
+          </Button>
+           <Button 
+            onClick={clearTokenCache}
+            variant="ghost" 
+            size="sm" // Use sm size on larger screens
+            className="text-red-400 hover:text-red-300 hidden sm:inline-flex" // Show with text on sm+
             title="Clear Token Cache"
           >
             <DatabaseZap className="h-4 w-4 mr-1" />
@@ -1792,14 +1810,25 @@ export function ChatInterface() {
           <Button 
             onClick={handleCleanupAllTokens}
             variant="ghost" 
-            size="sm"
-            className="text-orange-400 hover:text-orange-300"
+            size="icon" 
+            className="text-orange-400 hover:text-orange-300 sm:hidden" 
+            title="Remove All Tokens"
+          >
+            <Ban className="h-4 w-4" />
+          </Button>
+           <Button 
+            onClick={handleCleanupAllTokens}
+            variant="ghost" 
+            size="sm" 
+            className="text-orange-400 hover:text-orange-300 hidden sm:inline-flex sm:gap-2" // Added sm:gap-2 here
             title="Remove All Tokens"
           >
             <Ban className="h-4 w-4 mr-1" />
             <span className="text-sm">Clear Tokens</span>
           </Button>
-          <NetworkSwitcher />
+          <div className="w-[80px] sm:w-[120px] mr-2"> {/* Reduced xs width */}
+             <NetworkSwitcher /> 
+          </div>
           <WalletButton />
         </div>
       </div>
@@ -1828,7 +1857,7 @@ export function ChatInterface() {
           </AnimatePresence>
         </ScrollArea>
       </div>
-      <div className="border-t border-gray-800 dark:border-gray-800 light:border-gray-200 p-4 bg-gray-900 dark:bg-gray-900 light:bg-gray-50 sticky bottom-0 z-10 shadow-lg ">
+      <div className="border-t border-gray-800 dark:border-gray-800 light:border-gray-200 p-2 sm:p-4 bg-gray-900 dark:bg-gray-900 light:bg-gray-50 sticky bottom-0 z-10 shadow-lg">
         <ChatInputForm 
           onSendMessage={handleInputSend} 
           isLoading={isLoading} 
