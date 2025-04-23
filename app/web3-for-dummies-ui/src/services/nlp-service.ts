@@ -631,25 +631,67 @@ export async function parsePaymentInstruction(message: string): Promise<PaymentI
   }
 
   // 5. Fallback to Regex if AI failed, had low confidence, or wasn't used
-  if (!instruction || instruction.confidence < 0.7) {
-    if (instruction) { // Log if AI result was discarded due to low confidence
-      logger.warn(`AI parsing confidence low (${instruction.confidence}), falling back to regex for: ${message}`);
-    } else if (genAI) { // Log if AI parsing failed entirely
-      logger.warn(`AI parsing failed, falling back to regex for: ${message}`);
-    } else { // Log if AI wasn't used (no API key)
-      logger.info(`Parsing with Regex (no AI key): ${message}`);
-    }
-    instruction = parseWithRegex(message); // Use regex parser
+  let useRegexFallback = false;
+  if (!instruction) {
+    // AI failed completely or wasn't used
+    useRegexFallback = true;
+    if (genAI) logger.warn(`AI parsing failed, falling back to regex for: ${message}`);
+    else logger.info(`Parsing with Regex (no AI key): ${message}`);
+  } else if (instruction.confidence < 0.7) {
+    // AI confidence too low
+    useRegexFallback = true;
+    logger.warn(`AI parsing confidence low (${instruction.confidence}), falling back to regex for: ${message}`);
   } else {
-    logger.info(`Using AI result (confidence: ${instruction.confidence}) for: ${message}`);
+    // AI confidence is high, BUT check if it looks like a generic non-match
+    const isGenericNonMatch = !instruction.isPayment &&
+      !instruction.isBalanceCheck &&
+      !instruction.isMintRequest &&
+      !instruction.isTokenCleanup &&
+      !instruction.isSwapRequest &&
+      !instruction.isAddLiquidity &&
+      !instruction.isCreatePool &&
+      !instruction.isPoolLiquidityCheck &&
+      !instruction.isUnwrapSol &&
+      !instruction.isHelpRequest && // Added help check
+      !instruction.listAllTokens &&
+      !instruction.isFixTokenNames;
+
+    if (isGenericNonMatch) {
+      // If it looks like a generic non-match from AI, try regex anyway
+      logger.warn(`AI returned high confidence generic non-match, trying regex as fallback for: ${message}`);
+      useRegexFallback = true;
+    } else {
+      // AI confidence is high and it identified a specific action
+      logger.info(`Using AI result (confidence: ${instruction.confidence}) for: ${message}`);
+    }
   }
 
-  // 6. Final Adjustments (Network, Confirmation, Original Message)
-  // Ensure network context is set if missing from parsing
-  if (!instruction.network) {
-    instruction.network = currentNetworkContext;
+  // If fallback is needed, run regex parser
+  if (useRegexFallback) {
+    const regexInstruction = parseWithRegex(message);
+    // Optional: Decide if the regex result is better than a low-confidence AI result
+    // For now, we'll just use the regex result if we decided to fall back.
+    instruction = regexInstruction;
+    logger.info(`Using Regex fallback result for: ${message}`);
   }
-  instruction.originalMessage = message; // Store original message
+
+
+  // 6. Final Adjustments (Network, Confirmation, Original Message)
+  // Ensure instruction is not null before proceeding
+  if (!instruction) {
+    // This should ideally not happen if regex always returns something,
+    // but handle it just in case.
+    logger.error(`Parsing failed completely for: ${message}`);
+    // Return a default "not understood" instruction
+    return {
+      isPayment: false,
+      isHelpRequest: true, // Trigger help response
+      responseText: "Sorry, I couldn't understand that command.",
+      network: currentNetworkContext,
+      confidence: 0,
+      originalMessage: message,
+    };
+  } // Store original message
 
   // Add simple confirmation logic (example)
   if (instruction.isPayment && instruction.amount && instruction.amount > 1 && instruction.token === 'SOL') {
@@ -894,291 +936,499 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
 }
 
 // Keep the original regex parser as fallback
+// function parseWithRegex(message: string): PaymentInstruction {
+//   // Convert message to lowercase for case-insensitive matching
+//   const lowerMessage = message.toLowerCase();
+
+//   let network: "localnet" | "devnet" | "mainnet" = "devnet";
+
+//   const burnCommand = detectBurnCommand(message);
+//   if (burnCommand) {
+//     return burnCommand;
+//   }
+
+//   if (lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
+//     network = "devnet";
+//     setNetworkContext("devnet"); // Update context when explicitly specified
+//   } else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
+//     network = "mainnet";
+//     setNetworkContext("mainnet"); // Update context when explicitly specified
+//   } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
+//     network = "localnet";
+//     setNetworkContext("localnet"); // Update context when explicitly specified
+//   }
+
+//   const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
+//   const swapAltRegex = /swap\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+to\s+([a-z]+)/i;
+
+//   const swapMatch = lowerMessage.match(swapRegex) || lowerMessage.match(swapAltRegex);
+
+//   if (swapMatch) {
+//     const amount = parseFloat(swapMatch[1]);
+//     const fromToken = swapMatch[2].toUpperCase();
+//     const toToken = swapMatch[3].toUpperCase();
+
+//     // console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
+//     let estimatedReceiveAmount = amount;
+//     if (fromToken === "USDC" && toToken === "SOL") {
+//       estimatedReceiveAmount = amount / 200;
+//       console.log(`Value estimate: ${amount} USDC = ${estimatedReceiveAmount} SOL`);
+
+//     } else if (fromToken === 'SOL' && toToken === 'USDC') {
+//       estimatedReceiveAmount = amount * 200;
+//       console.log(`Value estimate: ${amount} SOL = ${estimatedReceiveAmount} USDC`);
+//     }
+
+//     return {
+//       isPayment: false,
+//       isSwapRequest: true,
+//       amount,
+//       fromToken,
+//       toToken,
+//       estimatedReceiveAmount,
+//       network,
+//       confidence: 0.95
+//     };
+//   }
+
+//   // Also check for general swap keywords
+//   if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+//     return {
+//       isPayment: false,
+//       isSwapRequest: true,
+//       fromToken: '',
+//       toToken: '',
+//       amount: 1,
+//       network,
+//       confidence: 0.7
+//     };
+//   }
+
+//   if (lowerMessage.includes('mint') ||
+//     (lowerMessage.includes('create') && lowerMessage.includes('token'))) {
+
+//     // Extract token symbol (default to USDC if not specified)
+//     let token = 'USDC';
+//     let amount = 100; // Default amount
+
+//     const amountTokenPattern = /mint\s+(\d+(?:\.\d+)?)\s+([a-z]+)/i;
+//     const tokenOnlyPattern = /mint\s+([a-z]+)(?!\d)/i;
+
+//     // First try to match the pattern with amount
+//     const amountTokenMatch = lowerMessage.match(amountTokenPattern);
+//     if (amountTokenMatch) {
+//       amount = parseFloat(amountTokenMatch[1]);
+//       token = amountTokenMatch[2].toUpperCase();
+//       console.log(`Parsed mint command: ${amount} ${token}`);
+//     } else {
+//       // If no amount found, try to match just token
+//       const tokenOnlyMatch = lowerMessage.match(tokenOnlyPattern);
+//       if (tokenOnlyMatch) {
+//         token = tokenOnlyMatch[1].toUpperCase();
+//         console.log(`Parsed mint command with default amount: 100 ${token}`);
+//       }
+//     }
+
+//     return {
+//       isPayment: false,
+//       isBalanceCheck: false,
+//       isMintRequest: true,
+//       token,
+//       amount,
+//       network,
+//       confidence: 0.9
+//     };
+//   }
+//   // Common payment keywords
+//   const paymentKeywords = ['send', 'transfer', 'pay'];
+//   const balanceKeywords = ['balance', 'check balance', 'how much', 'show balance', 'available balance'];
+//   const tokenTypes = ['usdc', 'sol', 'usdt', 'eth'];
+
+//   // Check if the message contains payment intent
+//   const hasPaymentKeyword = paymentKeywords.some(keyword => lowerMessage.includes(keyword));
+
+
+//   const isBalanceCheck = balanceKeywords.some(keyword => lowerMessage.includes(keyword));
+//   if (isBalanceCheck) {
+
+//     let isCompleteBalanceCheck = lowerMessage === 'balance' ||
+//       lowerMessage === 'show balance' ||
+//       lowerMessage === 'show all balances' ||
+//       lowerMessage === 'check balance' ||
+//       lowerMessage === 'wallet balance';
+
+//     let token = 'SOL';
+//     for (const tokenType of tokenTypes) {
+//       if (lowerMessage.includes(tokenType)) {
+//         token = tokenType.toUpperCase();
+//         break;
+//       }
+//     }
+
+//     return {
+//       isPayment: false,
+//       isBalanceCheck: true,
+//       isCompleteBalanceCheck,
+//       token,
+//       network,
+//       confidence: 0.8,
+//     }
+//   }
+
+
+//   const createPoolPattern = /(?:create\s+(?:pool|liquidity)|createpool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+//   const createpoolMatch = lowerMessage.match(createPoolPattern);
+
+//   if (createpoolMatch) {
+//     return {
+//       isPayment: false,
+//       isBalanceCheck: false,
+//       isCompleteBalanceCheck: false,
+//       isMintRequest: false,
+//       isTokenCleanup: false,
+//       isSwapRequest: false,
+//       isAddLiquidity: false,
+//       isCreatePool: true,
+//       tokenA: createpoolMatch[1],
+//       tokenB: createpoolMatch[2],
+//       amountA: parseFloat(createpoolMatch[3]) || 2,
+//       amountB: parseFloat(createpoolMatch[4]) || 2,
+//       network: "localnet",
+//       confidence: 0.95
+//     };
+//   }
+
+//   const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+//   const liquidityMatch = lowerMessage.match(addLiquidityRegex);
+//   if (liquidityMatch || lowerMessage.includes("addliquidity")) {
+//     let tokenA = '', tokenB = '';
+//     let amountA = 1, amountB = 1;
+
+//     if (liquidityMatch) {
+//       tokenA = liquidityMatch[1].toUpperCase();
+//       tokenB = liquidityMatch[2].toUpperCase();
+
+//       if (liquidityMatch[3]) {
+//         amountA = parseFloat(liquidityMatch[3]);
+//       }
+
+//       if (liquidityMatch[4]) {
+//         amountB = parseFloat(liquidityMatch[4]);
+//       }
+//     }
+
+//     return {
+//       isPayment: false,
+//       isAddLiquidity: true,
+//       tokenA,
+//       tokenB,
+//       amountA,
+//       amountB,
+//       network,
+//       confidence: liquidityMatch ? 0.95 : 0.8
+//     };
+//   }
+
+//   if (!hasPaymentKeyword) {
+//     return { isPayment: false, confidence: 0.9 };
+//   }
+
+
+//   if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+//     return {
+//       isPayment: false,
+//       isSwapRequest: true,
+//       fromToken: '',
+//       toToken: '',
+//       amount: 1,
+//       network,
+//       confidence: 0.7
+//     };
+//   }
+//   // Pattern for "send X [TOKEN] to [ADDRESS]"
+//   // Improved regex that's more flexible with formatting
+//   const simplePaymentRegex = /(?:send|transfer|pay)\s+(\d+(?:\.\d+)?)\s*(usdc|sol|usdt|eth)?\s+(?:to|for)?\s*([a-zA-Z0-9]{32,44})/i;
+//   const match = message.match(simplePaymentRegex);
+
+//   // If we found a standard payment pattern
+//   if (match) {
+//     const amount = parseFloat(match[1]);
+//     // Default to SOL if no token specified (more common for Solana)
+//     const token = (match[2] || 'sol').toUpperCase();
+//     const recipient = match[3];
+
+//     // Basic validation
+//     const isValidAmount = !isNaN(amount) && amount > 0;
+//     const isValidAddress = recipient && recipient.length >= 32 && recipient.length <= 44;
+
+//     let confidence = 0.7; // Base confidence
+
+//     // Adjust confidence based on validations
+//     if (!isValidAmount) confidence -= 0.3;
+//     if (!isValidAddress) confidence -= 0.4;
+
+//     return {
+//       isPayment: true,
+//       amount: isValidAmount ? amount : undefined,
+//       token,
+//       recipient: isValidAddress ? recipient : undefined,
+//       confidence
+//     };
+//   }
+
+//   // Fallback: Try to extract pieces from less structured input
+//   const amountMatch = lowerMessage.match(/(\d+(?:\.\d+)?)\s*(usdc|sol|usdt|eth)?/i);
+//   const addressMatch = lowerMessage.match(/([a-zA-Z0-9]{32,44})/);
+
+//   if (amountMatch || addressMatch) {
+//     const amount = amountMatch ? parseFloat(amountMatch[1]) : undefined;
+//     const token = (amountMatch && amountMatch[2]) ? amountMatch[2].toUpperCase() : 'SOL';
+//     const recipient = addressMatch ? addressMatch[1] : undefined;
+
+//     return {
+//       isPayment: true,
+//       amount,
+//       token,
+//       recipient,
+//       confidence: 0.5 // Lower confidence for partial matches
+//     };
+//   }
+//   if (lowerMessage.includes("cleanup") || lowerMessage.includes("remove")) {
+//     // Default to unknown if no specific token is mentioned
+//     let cleanupTarget: "unknown" | string[] = "unknown";
+
+//     // Look for supported token symbols in the message
+//     const knownTokens = ["sol", "usdc", "adi", "nix", "bonk"];
+//     for (const token of knownTokens) {
+//       if (lowerMessage.includes(token)) {
+//         cleanupTarget = [token.toUpperCase()];
+//         break;
+//       }
+//     }
+
+//     return {
+//       isPayment: false,
+//       isBalanceCheck: false,
+//       isMintRequest: false,
+//       isTokenCleanup: true,
+//       cleanupTarget,
+//       network,
+//       confidence: 0.9
+//     };
+//   }
+
+//   // No payment details found
+//   return { isPayment: hasPaymentKeyword, confidence: 0.3 };
+// }
+// ... (keep imports, logger, context functions, COMMON_PATTERNS, HELP_RESPONSE, PaymentInstruction interface) ...
+
+// Main parsing function using Regex as primary or fallback
 function parseWithRegex(message: string): PaymentInstruction {
-  // Convert message to lowercase for case-insensitive matching
-  const lowerMessage = message.toLowerCase();
+  const lowerMessage = message.toLowerCase().trim();
+  let network: "localnet" | "devnet" | "mainnet" = currentNetworkContext; // Default to current context
 
-  let network: "localnet" | "devnet" | "mainnet" = "devnet";
+  // --- 1. Network Detection ---
+  // Check for explicit network specification first and update context
+  const networkMatch = lowerMessage.match(/\b(on|network)\s+(localnet|devnet|mainnet)\b/);
+  if (networkMatch) {
+    network = networkMatch[2] as "localnet" | "devnet" | "mainnet";
+    setNetworkContext(network); // Update global context
+    logger.info(`Regex detected network override: ${network}`);
+  }
+  // Remove network specification for further parsing
+  const messageWithoutNetwork = lowerMessage.replace(/\s*\b(on|network)\s+(localnet|devnet|mainnet)\b\s*/, '').trim();
 
-  const burnCommand = detectBurnCommand(message);
-  if (burnCommand) {
-    return burnCommand;
+
+  // --- 2. Specific High-Priority Commands ---
+
+  // Help / Greetings
+  const greetings = ["hello", "help", "hi", "hii", "hey", "yo", "sup", "what's up", "wassup", "good morning", "good afternoon", "good evening"];
+  if (greetings.includes(messageWithoutNetwork)) {
+    return { isPayment: false, isHelpRequest: true, responseText: HELP_RESPONSE, network, confidence: 1.0, originalMessage: message };
   }
 
-  if (lowerMessage.includes("devnet") || lowerMessage.includes("dev net")) {
-    network = "devnet";
-    setNetworkContext("devnet"); // Update context when explicitly specified
-  } else if (lowerMessage.includes("mainnet") || lowerMessage.includes("main net")) {
-    network = "mainnet";
-    setNetworkContext("mainnet"); // Update context when explicitly specified
-  } else if (lowerMessage.includes("localnet") || lowerMessage.includes("local net")) {
-    network = "localnet";
-    setNetworkContext("localnet"); // Update context when explicitly specified
+  // Fix Token Names
+  if (/^(fix|update)\s+(token|tokens)(\s+name)?s?$/.test(messageWithoutNetwork)) {
+    return { isPayment: false, isFixTokenNames: true, network, confidence: 1.0, originalMessage: message };
   }
 
-  const swapRegex = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for)\s+([a-z]+)/i;
-  const swapAltRegex = /swap\s+(\d+(?:\.\d+)?)\s+([a-z]+)\s+to\s+([a-z]+)/i;
+  // Unwrap SOL
+  if (/^(unwrap|close|convert)\s+(wsol|sol|wrapped sol)\b(?:\s+to\s+sol)?$/.test(messageWithoutNetwork) || messageWithoutNetwork === 'unwrap') {
+    return { isPayment: false, isUnwrapSol: true, network, confidence: 1.0, originalMessage: message };
+  }
 
-  const swapMatch = lowerMessage.match(swapRegex) || lowerMessage.match(swapAltRegex);
+  // List All Tokens
+  if (/^(list|show)\s+(all\s+)?tokens?(\s+including\s+unknown)?$/.test(messageWithoutNetwork) || messageWithoutNetwork === 'list all') {
+    return { isPayment: false, listAllTokens: true, network, confidence: 1.0, originalMessage: message };
+  }
 
+  // Balance Checks (Improved)
+  const balanceKeywords = ['balance', 'check balance', 'how much', 'show balance', 'available balance', 'wallet balance'];
+  const balanceMatch = messageWithoutNetwork.match(/(?:balance|check balance|how much|show balance|available balance|wallet balance)(?:\s+(?:of|for)\s+([a-z0-9]+))?/i);
+  const isBalanceCheck = balanceKeywords.some(keyword => messageWithoutNetwork.startsWith(keyword)); // Check start
+
+  if (isBalanceCheck || balanceMatch) {
+    const specificToken = balanceMatch?.[1]; // Check group 1 for specific token
+    const isComplete = !specificToken && (messageWithoutNetwork === 'balance' || messageWithoutNetwork === 'show balance' || messageWithoutNetwork === 'show all balances' || messageWithoutNetwork === 'check balance' || messageWithoutNetwork === 'wallet balance');
+    const token = specificToken ? specificToken.toUpperCase() : 'SOL'; // Default SOL
+    return { isPayment: false, isBalanceCheck: true, isCompleteBalanceCheck: isComplete, token, network, confidence: 0.9, originalMessage: message };
+  }
+
+  // --- 3. Commands with Parameters ---
+
+  // Minting
+  const mintPattern = /mint\s+(?:(\d+(?:\.\d+)?)\s+)?([a-z0-9]+)(?:\s+tokens?)?/i;
+  const mintMatch = messageWithoutNetwork.match(mintPattern);
+  if (mintMatch) {
+    const amount = mintMatch[1] ? parseFloat(mintMatch[1]) : 100; // Default 100 if amount omitted
+    const token = mintMatch[2].toUpperCase();
+    return { isPayment: false, isMintRequest: true, amount, token, network, confidence: 0.95, originalMessage: message };
+  }
+
+  // Swapping
+  const swapPattern = /(?:swap|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)\s+(?:to|for)\s+([a-z0-9]+)/i;
+  const swapMatch = messageWithoutNetwork.match(swapPattern);
   if (swapMatch) {
     const amount = parseFloat(swapMatch[1]);
     const fromToken = swapMatch[2].toUpperCase();
     const toToken = swapMatch[3].toUpperCase();
-
-    // console.log(`Parsed swap command: ${amount} ${fromToken} to ${toToken}`);
-    let estimatedReceiveAmount = amount;
-    if (fromToken === "USDC" && toToken === "SOL") {
-      estimatedReceiveAmount = amount / 200;
-      console.log(`Value estimate: ${amount} USDC = ${estimatedReceiveAmount} SOL`);
-
-    } else if (fromToken === 'SOL' && toToken === 'USDC') {
-      estimatedReceiveAmount = amount * 200;
-      console.log(`Value estimate: ${amount} SOL = ${estimatedReceiveAmount} USDC`);
-    }
-
-    return {
-      isPayment: false,
-      isSwapRequest: true,
-      amount,
-      fromToken,
-      toToken,
-      estimatedReceiveAmount,
-      network,
-      confidence: 0.95
-    };
+    let estimatedReceiveAmount = amount; // Basic estimation
+    if (fromToken === "USDC" && toToken === "SOL") estimatedReceiveAmount = amount / 200;
+    else if (fromToken === 'SOL' && toToken === 'USDC') estimatedReceiveAmount = amount * 200;
+    return { isPayment: false, isSwapRequest: true, amount, fromToken, toToken, estimatedReceiveAmount, network, confidence: 0.95, originalMessage: message };
+  }
+  // General swap keyword check (lower confidence)
+  if (messageWithoutNetwork.includes('swap') || messageWithoutNetwork.includes('exchange')) {
+    return { isPayment: false, isSwapRequest: true, fromToken: '', toToken: '', amount: 1, network, confidence: 0.7, originalMessage: message };
   }
 
-  // Also check for general swap keywords
-  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
-    return {
-      isPayment: false,
-      isSwapRequest: true,
-      fromToken: '',
-      toToken: '',
-      amount: 1,
-      network,
-      confidence: 0.7
-    };
+  // Burning Specific Amount (Integrated from detectBurnCommand)
+  const burnSpecificPattern = /burn\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)(?:\s+tokens?)?/i;
+  const burnSpecificMatch = messageWithoutNetwork.match(burnSpecificPattern);
+  if (burnSpecificMatch) {
+    const amount = parseFloat(burnSpecificMatch[1]);
+    const token = burnSpecificMatch[2].toUpperCase();
+    logger.info(`Regex detected burn command: ${amount} ${token}`);
+    return { isPayment: false, burnSpecificAmount: true, burnAmount: amount, token, network, confidence: 0.95, originalMessage: message };
   }
 
-  if (lowerMessage.includes('mint') ||
-    (lowerMessage.includes('create') && lowerMessage.includes('token'))) {
+  // Burning by Mint Address
+  const burnMintPattern = /burn\s+(\d+(?:\.\d+)?)\s+(?:tokens?\s+)?from\s+mint(?:\s+address)?\s+([a-zA-Z0-9]{32,44})/i;
+  const burnMintMatch = messageWithoutNetwork.match(burnMintPattern);
+  if (burnMintMatch) {
+    const amount = parseFloat(burnMintMatch[1]);
+    const mintAddress = burnMintMatch[2];
+    return { isPayment: false, burnByMintAddress: true, burnAmount: amount, mintAddress, network, confidence: 0.95, originalMessage: message };
+  }
 
-    // Extract token symbol (default to USDC if not specified)
-    let token = 'USDC';
-    let amount = 100; // Default amount
-
-    const amountTokenPattern = /mint\s+(\d+(?:\.\d+)?)\s+([a-z]+)/i;
-    const tokenOnlyPattern = /mint\s+([a-z]+)(?!\d)/i;
-
-    // First try to match the pattern with amount
-    const amountTokenMatch = lowerMessage.match(amountTokenPattern);
-    if (amountTokenMatch) {
-      amount = parseFloat(amountTokenMatch[1]);
-      token = amountTokenMatch[2].toUpperCase();
-      console.log(`Parsed mint command: ${amount} ${token}`);
+  // Token Cleanup
+  const cleanupPattern = /(?:cleanup|remove|delete|clean)\s+(.+)/i;
+  const cleanupMatch = messageWithoutNetwork.match(cleanupPattern);
+  if (cleanupMatch) {
+    const target = cleanupMatch[1].trim();
+    let cleanupTarget: "unknown" | "all" | string[] = "unknown"; // Default
+    if (target === 'all tokens' || target === 'all') {
+      cleanupTarget = "all";
+    } else if (target === 'unknown tokens' || target === 'unknown') {
+      cleanupTarget = "unknown";
     } else {
-      // If no amount found, try to match just token
-      const tokenOnlyMatch = lowerMessage.match(tokenOnlyPattern);
-      if (tokenOnlyMatch) {
-        token = tokenOnlyMatch[1].toUpperCase();
-        console.log(`Parsed mint command with default amount: 100 ${token}`);
+      const tokens = target.replace(/tokens?/, '').trim().split(/\s+/).map(t => t.toUpperCase());
+      if (tokens.length > 0 && tokens[0] !== '') { // Check if tokens were actually extracted
+        cleanupTarget = tokens;
       }
     }
-
-    return {
-      isPayment: false,
-      isBalanceCheck: false,
-      isMintRequest: true,
-      token,
-      amount,
-      network,
-      confidence: 0.9
-    };
+    return { isPayment: false, isTokenCleanup: true, cleanupTarget, network, confidence: 0.9, originalMessage: message };
   }
-  // Common payment keywords
-  const paymentKeywords = ['send', 'transfer', 'pay'];
-  const balanceKeywords = ['balance', 'check balance', 'how much', 'show balance', 'available balance'];
-  const tokenTypes = ['usdc', 'sol', 'usdt', 'eth'];
-
-  // Check if the message contains payment intent
-  const hasPaymentKeyword = paymentKeywords.some(keyword => lowerMessage.includes(keyword));
-
-
-  const isBalanceCheck = balanceKeywords.some(keyword => lowerMessage.includes(keyword));
-  if (isBalanceCheck) {
-
-    let isCompleteBalanceCheck = lowerMessage === 'balance' ||
-      lowerMessage === 'show balance' ||
-      lowerMessage === 'show all balances' ||
-      lowerMessage === 'check balance' ||
-      lowerMessage === 'wallet balance';
-
-    let token = 'SOL';
-    for (const tokenType of tokenTypes) {
-      if (lowerMessage.includes(tokenType)) {
-        token = tokenType.toUpperCase();
-        break;
-      }
-    }
-
-    return {
-      isPayment: false,
-      isBalanceCheck: true,
-      isCompleteBalanceCheck,
-      token,
-      network,
-      confidence: 0.8,
-    }
+  // Simpler cleanup commands
+  if (messageWithoutNetwork === 'cleanup' || messageWithoutNetwork === 'cleanup tokens') {
+    return { isPayment: false, isTokenCleanup: true, cleanupTarget: 'unknown', network, confidence: 0.85, originalMessage: message };
   }
 
-
-  const createPoolPattern = /(?:create\s+(?:pool|liquidity)|createpool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
-  const createpoolMatch = lowerMessage.match(createPoolPattern);
-
-  if (createpoolMatch) {
+  // Create Pool
+  const createPoolPattern = /(?:create\s+pool|createpool)\s+([a-z0-9]+)\s+([a-z0-9]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const createPoolMatch = messageWithoutNetwork.match(createPoolPattern);
+  if (createPoolMatch) {
     return {
-      isPayment: false,
-      isBalanceCheck: false,
-      isCompleteBalanceCheck: false,
-      isMintRequest: false,
-      isTokenCleanup: false,
-      isSwapRequest: false,
-      isAddLiquidity: false,
-      isCreatePool: true,
-      tokenA: createpoolMatch[1],
-      tokenB: createpoolMatch[2],
-      amountA: parseFloat(createpoolMatch[3]) || 2,
-      amountB: parseFloat(createpoolMatch[4]) || 2,
-      network: "localnet",
-      confidence: 0.95
+      isPayment: false, isCreatePool: true,
+      tokenA: createPoolMatch[1].toUpperCase(),
+      tokenB: createPoolMatch[2].toUpperCase(),
+      amountA: createPoolMatch[3] ? parseFloat(createPoolMatch[3]) : 2, // Default amount
+      amountB: createPoolMatch[4] ? parseFloat(createPoolMatch[4]) : 2, // Default amount
+      network, confidence: 0.95, originalMessage: message
     };
   }
 
-  const addLiquidityRegex = /add\s+(?:liquidity|pool)\s+([a-z]+)\s+([a-z]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
-  const liquidityMatch = lowerMessage.match(addLiquidityRegex);
-  if (liquidityMatch || lowerMessage.includes("addliquidity")) {
-    let tokenA = '', tokenB = '';
-    let amountA = 1, amountB = 1;
-
-    if (liquidityMatch) {
-      tokenA = liquidityMatch[1].toUpperCase();
-      tokenB = liquidityMatch[2].toUpperCase();
-
-      if (liquidityMatch[3]) {
-        amountA = parseFloat(liquidityMatch[3]);
-      }
-
-      if (liquidityMatch[4]) {
-        amountB = parseFloat(liquidityMatch[4]);
-      }
-    }
-
+  // Add Liquidity
+  const addLiquidityPattern = /(?:add\s+liquidity|add\s+pool|addliquidity)\s+([a-z0-9]+)\s+([a-z0-9]+)(?:\s+(\d+(?:\.\d+)?))?(?:\s+(\d+(?:\.\d+)?))?/i;
+  const addLiquidityMatch = messageWithoutNetwork.match(addLiquidityPattern);
+  if (addLiquidityMatch) {
     return {
-      isPayment: false,
-      isAddLiquidity: true,
-      tokenA,
-      tokenB,
-      amountA,
-      amountB,
-      network,
-      confidence: liquidityMatch ? 0.95 : 0.8
+      isPayment: false, isAddLiquidity: true,
+      tokenA: addLiquidityMatch[1].toUpperCase(),
+      tokenB: addLiquidityMatch[2].toUpperCase(),
+      amountA: addLiquidityMatch[3] ? parseFloat(addLiquidityMatch[3]) : 1, // Default amount
+      amountB: addLiquidityMatch[4] ? parseFloat(addLiquidityMatch[4]) : 1, // Default amount
+      network, confidence: 0.95, originalMessage: message
     };
   }
 
-  if (!hasPaymentKeyword) {
-    return { isPayment: false, confidence: 0.9 };
-  }
-
-
-  if (lowerMessage.includes('swap') || lowerMessage.includes('exchange')) {
+  // Check Pool Liquidity
+  const checkPoolPattern = /(?:check|show)\s+pool(?:\s+liquidity|\s+details)?(?:\s+for)?\s+([a-z0-9]+)\s*(?:\/|\s+)\s*([a-z0-9]+)/i;
+  const checkPoolMatch = messageWithoutNetwork.match(checkPoolPattern);
+  if (checkPoolMatch) {
     return {
-      isPayment: false,
-      isSwapRequest: true,
-      fromToken: '',
-      toToken: '',
-      amount: 1,
-      network,
-      confidence: 0.7
+      isPayment: false, isPoolLiquidityCheck: true,
+      tokenA: checkPoolMatch[1].toUpperCase(),
+      tokenB: checkPoolMatch[2].toUpperCase(),
+      network, confidence: 0.95, originalMessage: message
     };
   }
-  // Pattern for "send X [TOKEN] to [ADDRESS]"
-  // Improved regex that's more flexible with formatting
-  const simplePaymentRegex = /(?:send|transfer|pay)\s+(\d+(?:\.\d+)?)\s*(usdc|sol|usdt|eth)?\s+(?:to|for)?\s*([a-zA-Z0-9]{32,44})/i;
-  const match = message.match(simplePaymentRegex);
 
-  // If we found a standard payment pattern
-  if (match) {
-    const amount = parseFloat(match[1]);
-    // Default to SOL if no token specified (more common for Solana)
-    const token = (match[2] || 'sol').toUpperCase();
-    const recipient = match[3];
-
-    // Basic validation
+  // --- 4. Payment (Checked Last due to overlap potential) ---
+  const paymentPattern = /(?:send|transfer|pay)\s+(\d+(?:\.\d+)?)\s*([a-z0-9]+)?\s+(?:to|for)?\s*([a-zA-Z0-9]{32,44})/i;
+  const paymentMatch = messageWithoutNetwork.match(paymentPattern);
+  if (paymentMatch) {
+    const amount = parseFloat(paymentMatch[1]);
+    const token = (paymentMatch[2] || 'SOL').toUpperCase(); // Default to SOL if token omitted
+    const recipient = paymentMatch[3];
     const isValidAmount = !isNaN(amount) && amount > 0;
     const isValidAddress = recipient && recipient.length >= 32 && recipient.length <= 44;
 
-    let confidence = 0.7; // Base confidence
-
-    // Adjust confidence based on validations
-    if (!isValidAmount) confidence -= 0.3;
-    if (!isValidAddress) confidence -= 0.4;
-
-    return {
-      isPayment: true,
-      amount: isValidAmount ? amount : undefined,
-      token,
-      recipient: isValidAddress ? recipient : undefined,
-      confidence
-    };
-  }
-
-  // Fallback: Try to extract pieces from less structured input
-  const amountMatch = lowerMessage.match(/(\d+(?:\.\d+)?)\s*(usdc|sol|usdt|eth)?/i);
-  const addressMatch = lowerMessage.match(/([a-zA-Z0-9]{32,44})/);
-
-  if (amountMatch || addressMatch) {
-    const amount = amountMatch ? parseFloat(amountMatch[1]) : undefined;
-    const token = (amountMatch && amountMatch[2]) ? amountMatch[2].toUpperCase() : 'SOL';
-    const recipient = addressMatch ? addressMatch[1] : undefined;
-
-    return {
-      isPayment: true,
-      amount,
-      token,
-      recipient,
-      confidence: 0.5 // Lower confidence for partial matches
-    };
-  }
-  if (lowerMessage.includes("cleanup") || lowerMessage.includes("remove")) {
-    // Default to unknown if no specific token is mentioned
-    let cleanupTarget: "unknown" | string[] = "unknown";
-
-    // Look for supported token symbols in the message
-    const knownTokens = ["sol", "usdc", "adi", "nix", "bonk"];
-    for (const token of knownTokens) {
-      if (lowerMessage.includes(token)) {
-        cleanupTarget = [token.toUpperCase()];
-        break;
-      }
+    if (isValidAmount && isValidAddress) {
+      return { isPayment: true, amount, token, recipient, network, confidence: 0.95, originalMessage: message };
+    } else {
+      // Return with lower confidence if parts are invalid
+      return { isPayment: true, amount: isValidAmount ? amount : undefined, token, recipient: isValidAddress ? recipient : undefined, network, confidence: 0.6, originalMessage: message };
     }
-
-    return {
-      isPayment: false,
-      isBalanceCheck: false,
-      isMintRequest: false,
-      isTokenCleanup: true,
-      cleanupTarget,
-      network,
-      confidence: 0.9
-    };
   }
 
-  // No payment details found
-  return { isPayment: hasPaymentKeyword, confidence: 0.3 };
+  // --- 5. Fallback / Not Understood ---
+  logger.warn(`Regex parser couldn't fully understand: "${message}"`);
+  // Return a generic "not understood" triggering the help response
+  return {
+    isPayment: false,
+    isBalanceCheck: false,
+    isCompleteBalanceCheck: false,
+    isMintRequest: false,
+    isTokenCleanup: false,
+    isSwapRequest: false,
+    isAddLiquidity: false,
+    isCreatePool: false,
+    isPoolLiquidityCheck: false,
+    isUnwrapSol: false,
+    isFixTokenNames: false,
+    burnSpecificAmount: false,
+    burnByMintAddress: false,
+    listAllTokens: false,
+    isHelpRequest: true, // Trigger help response
+    responseText: "Sorry, I couldn't understand that command using regex.",
+    network: currentNetworkContext, // Use current context for fallback
+    confidence: 0.1, // Very low confidence
+    originalMessage: message,
+  };
 }
 
+// ... (rest of the file, including parsePaymentInstruction which calls parseWithRegex) ...
 function detectBurnCommand(message: string): PaymentInstruction | null {
   // Match any variations of "burn X token(s)"
   const burnPattern = /burn\s+(\d+(?:\.\d+)?)\s+([a-z]+)(?:\s+tokens?)?/i;

@@ -11,6 +11,8 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react"
 import { getNetworkContext, parsePaymentInstruction, setNetworkContext } from "@/services/nlp-service"
 import { executePayment, mintTestTokens, getAllWalletBalances, addLiquidityToPool, getPoolExactRatio, getPoolLiquidity, unwrapSol } from "@/services/solana-service"
 import * as React from "react"
+import * as RadixScrollArea from '@radix-ui/react-scroll-area'; // Import Radix types if needed
+
 import type { JSX } from 'react'
 import { Trash2 } from "lucide-react"
 import { ArrowDownUp } from "lucide-react";
@@ -129,7 +131,9 @@ export function ChatInterface() {
   const { connection } = useConnection()
   const router = useRouter();
   const wallet = useWallet()
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null); // Keep as HTMLDivElement for the outer container
+  const viewportRef = useRef<HTMLDivElement>(null); // Add a ref specifically for the viewport
+
   const networkOptions = ["localnet", "devnet", "mainnet"] as const
   const [network, setNetwork] = useState<"localnet" | "devnet" | "mainnet">(networkOptions[1])
 
@@ -158,13 +162,53 @@ export function ChatInterface() {
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]")
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight
+    // Use a short timeout to allow the DOM to update after new messages/loading state
+    const timer = setTimeout(() => {
+      if (scrollAreaRef.current) {
+        // Find the viewport element within the ScrollArea component
+        // This selector is common for Radix-based scroll areas (like shadcn/ui)
+        const viewport = scrollAreaRef.current.querySelector<HTMLDivElement>('[data-radix-scroll-area-viewport]');
+        if (viewport) {
+          // console.log("Scrolling viewport. scrollHeight:", viewport.scrollHeight); // Debug log
+          viewport.scrollTo({
+            top: viewport.scrollHeight,
+            behavior: "smooth"
+          });
+        } else {
+          // console.log("Scroll viewport not found with selector."); // Debug log
+        }
+      } else {
+        // console.log("Scroll area ref not available."); // Debug log
       }
-    }
-  }, [messages])
+    }, 50); // 50ms delay might be enough, adjust if needed
+
+    return () => clearTimeout(timer); // Cleanup the timer on unmount or before next run
+  }, [messages, isLoading]);
+  // useEffect(() => {
+  //   const scrollToBottom = () => {
+  //     if (viewportRef.current) {
+  //       // console.log("Attempting scroll. scrollHeight:", viewportRef.current.scrollHeight); // Debug log
+  //       viewportRef.current.scrollTo({
+  //         top: viewportRef.current.scrollHeight,
+  //         behavior: "smooth"
+  //       });
+  //     } else {
+  //       // console.log("Viewport ref not available yet."); // Debug log
+  //     }
+  //   };
+
+  //   // Try scrolling in the next animation frame to ensure DOM is updated
+  //   const animationFrameId = requestAnimationFrame(scrollToBottom);
+
+  //   // Optional: Fallback timeout if requestAnimationFrame isn't enough (less ideal)
+  //   // const timerId = setTimeout(scrollToBottom, 100);
+
+  //   return () => {
+  //     cancelAnimationFrame(animationFrameId);
+  //     // clearTimeout(timerId); // Clear timeout if using the fallback
+  //   };
+  // }, [messages, isLoading]); // Dependencies remain the same
+
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
