@@ -1867,7 +1867,7 @@ export function ChatInterface() {
             className="text-orange-400 hover:text-orange-300 hidden sm:inline-flex sm:gap-2" // Added sm:gap-2 here
             title="Remove All Tokens"
           >
-            <Ban className="h-4 w-4 mr-1" />
+            <Ban className="h-4 w-4 mr-1" />v
             <span className="text-sm">Clear Tokens</span>
           </Button>
           <div className="w-[80px] sm:w-[120px] mr-2"> {/* Reduced xs width */}

@@ -586,8 +586,13 @@ const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 //   }
 // }
 export async function parsePaymentInstruction(message: string): Promise<PaymentInstruction> {
+  const addressRegex = /([A-Za-z0-9]{32,44})/;
+  const addressMatch = message.match(addressRegex);
+  const originalCaseAddress = addressMatch ? addressMatch[0] : null;
+
   const lowerMessage = message.trim().toLowerCase();
   const cacheKey = `${lowerMessage}_${currentNetworkContext}`; // Include network in cache key
+
 
   // 1. Check Cache
   if (parsedCommandCache[cacheKey]) {
@@ -700,7 +705,10 @@ export async function parsePaymentInstruction(message: string): Promise<PaymentI
   if (instruction.isSwapRequest && instruction.amount && instruction.amount > 1 && instruction.fromToken === 'SOL') {
     instruction.needsConfirmation = true;
   }
-
+  if (instruction?.isPayment && instruction.recipient && originalCaseAddress) {
+    // Replace the lowercased address with the original case version
+    instruction.recipient = originalCaseAddress;
+  }
   // 7. Cache and Return
   parsedCommandCache[cacheKey] = instruction; // Cache the final result
   logger.info("Final Parsed Instruction:", instruction);
@@ -718,7 +726,7 @@ async function parseWithGemini(message: string): Promise<PaymentInstruction | nu
     You are a cryptocurrency payment parser for a Solana wallet app running on localnet (localhost).
 
     Parse the following message for either:
-    1. A cryptocurrency payment instruction, or
+    1. A Sol payment instruction, or
     2. A balance check request.
     3. A token minting request (new feature)
     4. A token cleanup request (new feature)
@@ -1404,7 +1412,7 @@ function parseWithRegex(message: string): PaymentInstruction {
 
   // --- 5. Fallback / Not Understood ---
   logger.warn(`Regex parser couldn't fully understand: "${message}"`);
-  // Return a generic "not understood" triggering the help response
+  // Return a generic "not understood" triggering the standard help response
   return {
     isPayment: false,
     isBalanceCheck: false,
@@ -1421,7 +1429,7 @@ function parseWithRegex(message: string): PaymentInstruction {
     burnByMintAddress: false,
     listAllTokens: false,
     isHelpRequest: true, // Trigger help response
-    responseText: "Sorry, I couldn't understand that command using regex.",
+    responseText: HELP_RESPONSE, // Use the standard help response here
     network: currentNetworkContext, // Use current context for fallback
     confidence: 0.1, // Very low confidence
     originalMessage: message,

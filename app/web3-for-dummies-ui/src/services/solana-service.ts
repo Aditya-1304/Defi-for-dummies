@@ -795,6 +795,23 @@ export async function executePayment(
           "http://localhost:8899",
       { commitment: 'confirmed' }
     );
+    console.debug(`Recipient address string received by executePayment: "${recipient}" (Type: ${typeof recipient})`);
+    if (!recipient || typeof recipient !== 'string') {
+      throw new Error(`Invalid recipient type: expected string, got ${typeof recipient}`);
+    }
+    let recipientPubKey;
+    try {
+      // Make sure we're using the exact string as provided, only trimming whitespace
+      recipientPubKey = new PublicKey(recipient.trim());
+
+      // Extra validation to ensure the key is valid
+      if (!PublicKey.isOnCurve(recipientPubKey.toBuffer())) {
+        throw new Error("Address is not on the ed25519 curve");
+      }
+    } catch (error) {
+      console.error("Invalid public key:", error);
+      throw new Error(`The address appears to be invalid. Solana addresses are case-sensitive. Please double-check the address: ${recipient}`);
+    }
 
     // Handle different network types
     let blockhash;
