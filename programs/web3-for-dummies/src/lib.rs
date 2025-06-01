@@ -30,7 +30,7 @@ pub mod web3_for_dummies {
 
     use super::*; // Imports items from the outer scope (like structs, errors, etc.)
 
-    /// Initializes a new liquidity pool with the given token mints.
+    /// CHANGED
     /// Creates the pool state account and associated token accounts (vaults) to hold the tokens.
     pub fn initialize_pool(ctx: Context<InitializePool>) -> Result<()> {
         // Get mutable access to the newly created pool account
